@@ -51,14 +51,12 @@ import {
 } from "./lib/shared";
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
-const APP_VERSION = "0.5.9";
+const APP_VERSION = "0.6.2";
 const MAKER_CREDIT = "由 Misaki（丛宇航）使用 CodeX 制作";
 const CHANGELOG_ITEMS = [
-  "剪切板自动读取移至录入页，导入页不再默认自动读取。",
-  "评价返款对比支持淘宝旺旺号、英文昵称等多种格式识别，验证弹窗移至顶部。",
-  "收评助手搜索性能优化，大量图片不再崩溃，缩略图按需加载。",
-  "修复视频切片弹跳特效导致 FFmpeg 裁剪报错的问题。",
-  "视频剪辑新增诊断修复按钮，一键排查 FFmpeg 问题，剪辑失败显示友好提示。"
+  "剪切板自动读取后直接触发识别，无需再手动点击识别按钮。",
+  "开启自动读取 + 自动跳转后，实现全自动 复制→识别→填入→跳转 工作流。",
+  "识别逻辑提取为 ref 回调，避免 setInterval 闭包过期问题。",
 ];
 
 const toolNavItems: Array<{ key: "home" | ToolboxTool; label: string; icon: typeof Upload }> = [
@@ -98,6 +96,7 @@ export default function App() {
   const [videoState, setVideoState] = useState<VideoWorkbenchState | null>(null);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const lastClipboardSignature = useRef("");
+  const autoRecognizingRef = useRef(false);
 
   const parsed = useMemo(() => buildRows(amountInput, remarkInput), [amountInput, remarkInput]);
   const currentRow = rows[currentIndex];
@@ -166,7 +165,11 @@ export default function App() {
         if (canceled || snapshot.signature === lastClipboardSignature.current || snapshot.kind !== "text" || !snapshot.text?.trim()) return;
         lastClipboardSignature.current = snapshot.signature;
         setManualText(snapshot.text);
-        showToast("剪切板已自动填入识别文本框。");
+        if (autoRecognizingRef.current) return;
+        autoRecognizingRef.current = true;
+        showToast("剪切板已读取，正在自动识别…");
+        try { await doRecognizeRef.current(snapshot.text); }
+        finally { autoRecognizingRef.current = false; }
       } catch {
         if (!canceled) showToast("读取剪切板失败，请手动粘贴。");
       }
@@ -285,23 +288,8 @@ export default function App() {
   }
 
   async function recognizeManualText() {
-    if (!currentRow) return;
-    if (!manualText.trim()) {
-      showToast("请先粘贴要识别的文字。");
-      return;
-    }
-    setRecognizing(true);
-    try {
-      const partial = recognizePartialByRules(manualText);
-      const result = partial && partial.account && partial.name
-        ? partial
-        : await recognizeText(manualText, settings);
-      applyRecognition(result);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "识别失败");
-    } finally {
-      setRecognizing(false);
-    }
+    if (!manualText.trim()) { showToast("请先粘贴要识别的文字。"); return; }
+    await doRecognizeRef.current(manualText);
   }
 
   function applyRecognition(result: RecognitionResult) {
@@ -322,6 +310,20 @@ export default function App() {
       showToast("已填入可识别字段，请补齐后保存。");
     }
   }
+
+  const doRecognizeRef = useRef<(text: string) => Promise<void>>(async () => {});
+  doRecognizeRef.current = async (text: string) => {
+    if (!currentRow || !text.trim()) return;
+    setRecognizing(true);
+    try {
+      const partial = recognizePartialByRules(text);
+      const result = partial && partial.account && partial.name
+        ? partial
+        : await recognizeText(text, settings);
+      applyRecognition(result);
+    } catch { /* auto-recognize silent fail */ }
+    finally { setRecognizing(false); }
+  };
 
   function saveManual() {
     if (!currentRow) return;
@@ -384,11 +386,11 @@ export default function App() {
           <BrandGlyph className="brand-mark" />
           <div><strong>{settings.toolboxName}</strong><span>E-commerce ops kit</span></div>
         </div>
-        <nav>
+        <nav role="navigation" aria-label="工具导航">
           {toolNavItems.map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.key} className={clsx("nav-item", activeTool === item.key && "active")} onClick={() => openTool(item.key)}>
+              <button key={item.key} className={clsx("nav-item", activeTool === item.key && "active")} aria-current={activeTool === item.key ? "page" : undefined} onClick={() => openTool(item.key)}>
                 <Icon size={18} />
                 <span>{item.label}</span>
               </button>
@@ -465,8 +467,8 @@ export default function App() {
                     <div className="progress-text">{currentIndex + 1} / {rows.length}</div>
                   </div>
                   <div className="manual-recognize">
-                    <label><span>手动输入识别</span><textarea value={manualText} onChange={(event) => setManualText(event.target.value)} placeholder="粘贴支付宝账号、姓名或聊天内容" /></label>
-                    <button onClick={recognizeManualText} disabled={recognizing}>{recognizing ? <Loader2 className="spin" size={18} /> : <Wand2 size={18} />} 识别这段文字</button>
+                    <label><span>识别文本</span><textarea value={manualText} onChange={(event) => setManualText(event.target.value)} placeholder="粘贴支付宝账号、姓名或聊天内容" /></label>
+                    <button onClick={recognizeManualText} disabled={recognizing}>{recognizing ? <Loader2 className="spin" size={18} /> : <Wand2 size={18} />} 重新识别</button>
                   </div>
                 </>
               ) : <EmptyState text="请先导入金额和备注。" />}
@@ -654,7 +656,7 @@ function SettingsView({ settings, onSave, ocrStatus, modelStatus, onTestModel }:
 }
 
 function Toggle({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
-  return <button className={clsx("toggle", checked && "on")} onClick={() => onChange(!checked)}><i /><span>{label}</span></button>;
+  return <button className={clsx("toggle", checked && "on")} role="switch" aria-checked={checked} onClick={() => onChange(!checked)}><i /><span>{label}</span></button>;
 }
 
 function FontScalePicker({ value, onChange }: { value: AppSettings["fontScale"]; onChange: (value: AppSettings["fontScale"]) => void }) {
