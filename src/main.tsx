@@ -1,6 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import "@fontsource-variable/cormorant-garamond";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/noto-sans-sc";
 import "./styles.css";
 import { DEFAULT_SETTINGS, DEFAULT_WORKBENCH_STATE, normalizeSettings } from "./lib/shared";
 
@@ -69,11 +72,14 @@ if (!window.alipayWorkbench) {
       score: 0,
       grade: "blocked",
       candidate: null,
-      recommendations: ["浏览器预览模式无法读取本地 Excel。"],
+      recommendations: [{ type: "missing-element" as const, message: "浏览器预览不可用", detail: "请使用桌面端", estimatedGain: 0 }],
+      substringHits: [],
+      suggestedTitles: [],
       warnings: ["浏览器预览模式无法读取本地 Excel。"]
     }),
-    getFfmpegStatus: async () => ({ available: false, path: "", detail: "浏览器预览模式无法检测内置 FFmpeg，请使用桌面端。", acceleration: "浏览器预览不可用", gpuNames: [] }),
+    getFfmpegStatus: async () => ({ available: false, path: "", detail: "浏览器预览模式无法检测内置 FFmpeg，请使用桌面端。", acceleration: "浏览器预览不可用" }),
     diagnoseFfmpeg: async () => ({ items: [], suggestions: ["浏览器预览模式不支持诊断，请使用桌面端。"], ok: false }),
+    autoFixFfmpeg: async () => ({ fixed: [], failed: ["浏览器预览模式不支持自动修复"], settingsPatch: null }),
     scanVideoLibrary: async () => [],
     renderVideoTask: async () => ({ success: false, log: "", error: "浏览器预览模式不执行 FFmpeg，请使用桌面端。" }),
     onVideoRenderProgress: () => () => undefined,
@@ -81,7 +87,14 @@ if (!window.alipayWorkbench) {
     getImagePreview: async () => "",
     scanReviewAssets: async () => [],
     loadReviewThumbnails: async () => ({}),
+    loadReviewThumbnailBatch: async () => ({}),
+    rebuildReviewIndex: async () => ({ ok: false, total: 0 }),
+    onReviewScanProgress: () => () => undefined,
+    startDragFiles: async () => undefined,
+    enhanceTitlePool: async () => ({ ok: false, selected: [], suggested: [], reason: "浏览器预览模式不支持 AI 选词" }),
     generateReviewCopy: async () => ({ copies: [] }),
+    listAvailableModels: async () => [],
+    testEverythingConnection: async () => ({ available: false, detail: "浏览器预览模式不支持 Everything 测试" }),
     checkForUpdates: async () => ({ state: "idle", detail: "浏览器预览模式不检查更新" }),
     downloadUpdate: async () => undefined,
     installUpdate: async () => undefined,
@@ -98,11 +111,6 @@ if (!window.alipayWorkbench) {
     exportWorkbook: async () => {
       alert("浏览器预览模式不导出 Excel；Electron 窗口启动后会调用系统保存对话框导出。");
       return { canceled: true };
-    },
-    getLocalOcrStatus: async () => ({ state: "not-installed", detail: "浏览器预览模式，本地 OCR 由 Electron 提供" }),
-    installLocalOcr: async () => ({ state: "ready", detail: "浏览器预览模式：已模拟安装入口" }),
-    localOcrRecognize: async () => {
-      throw new Error("浏览器预览模式不支持本地 OCR。");
     }
   };
 }

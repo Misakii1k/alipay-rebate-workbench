@@ -56,14 +56,6 @@ export const TEXT_RECOGNITION_PROMPT = `你是支付宝返款表录入助手。�
 JSON 格式：
 {"account":"支付宝账号","name":"收款方姓名","confidence":0.0,"reason":"简短说明"}`;
 
-export const VISION_RECOGNITION_PROMPT = `请对图片进行 OCR，并从图片文字中提取支付宝收款账号和收款方姓名。
-规则：
-1. 账号只能是手机号或邮箱。
-2. 姓名必须来自图片 OCR 文本，不要猜测。
-3. 只返回 JSON，不要 Markdown。
-JSON 格式：
-{"account":"支付宝账号","name":"收款方姓名","confidence":0.0,"reason":"简短说明","ocrText":"OCR文本摘要"}`;
-
 export const CLOUD_REVIEW_PROMPT = `你是支付宝返款表的云端复核助手。请根据原始文本和本地识别结果，判断本地识别的支付宝账号与收款方姓名是否可靠。
 规则：
 1. 账号只能是中国大陆手机号或邮箱。
@@ -187,7 +179,7 @@ function normalizeModelResult(value: Record<string, unknown>, source: Recognitio
     confidence: Number(value.confidence ?? 0),
     reason: String(value.reason ?? "模型识别完成"),
     source,
-    rawText: String(value.ocrText ?? "")
+    rawText: ""
   };
 }
 
@@ -206,57 +198,6 @@ export async function recognizeText(text: string, settings: AppSettings): Promis
     { role: "user", content: text }
   ]);
   return { ...normalizeModelResult(result, "text-model"), rawText: text };
-}
-
-export async function recognizeImageCloud(imageDataUrl: string, settings: AppSettings): Promise<RecognitionResult> {
-  if (!settings.aiEnabled) {
-    throw new Error("图片识别需要开启 AI 识别或切换到本地 OCR。");
-  }
-
-  if (settings.cloudOcrProvider === "ocr-api") {
-    if (!settings.ocrApiBaseUrl || !settings.ocrApiKey) {
-      throw new Error("请先填写云端 OCR API 地址和 Key。");
-    }
-    const ocrSettings = {
-      ...settings,
-      apiBaseUrl: settings.ocrApiBaseUrl,
-      apiKey: settings.ocrApiKey,
-      apiProfiles: [
-        {
-          id: "ocr-api",
-          name: "独立 OCR API",
-          apiBaseUrl: settings.ocrApiBaseUrl,
-          apiKey: settings.ocrApiKey,
-          textModel: settings.ocrApiModel || settings.textModel,
-          visionModel: settings.ocrApiModel || settings.visionModel
-        }
-      ],
-      activeApiProfileId: "ocr-api"
-    };
-  const result = await callChatCompletions(ocrSettings, settings.ocrApiModel || settings.visionModel, [
-      { role: "system", content: withLearningNotes(VISION_RECOGNITION_PROMPT, settings) },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "识别这张图中的支付宝账号和收款方姓名。" },
-          { type: "image_url", image_url: { url: imageDataUrl } }
-        ]
-      }
-    ]);
-    return normalizeModelResult(result, "vision-model");
-  }
-
-  const result = await callChatCompletions(settings, settings.visionModel, [
-    { role: "system", content: withLearningNotes(VISION_RECOGNITION_PROMPT, settings) },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "识别这张图中的支付宝账号和收款方姓名。" },
-        { type: "image_url", image_url: { url: imageDataUrl } }
-      ]
-    }
-  ]);
-  return normalizeModelResult(result, "vision-model");
 }
 
 export async function reviewRecognitionCloud(

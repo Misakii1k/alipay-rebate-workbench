@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#064e3b"/>
+      <stop offset="50%" stop-color="#047857"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <rect x="90" y="90" width="150" height="150" rx="28" fill="rgba(255,255,255,0.92)"/>
+  <rect x="272" y="90" width="150" height="150" rx="28" fill="rgba(255,255,255,0.72)"/>
+  <rect x="90" y="272" width="150" height="150" rx="28" fill="rgba(255,255,255,0.72)"/>
+  <rect x="272" y="272" width="150" height="150" rx="28" fill="rgba(255,255,255,0.52)"/>
+  <line x1="130" y1="145" x2="200" y2="145" stroke="#047857" stroke-width="10" stroke-linecap="round"/>
+  <line x1="130" y1="175" x2="185" y2="175" stroke="#047857" stroke-width="10" stroke-linecap="round" opacity="0.6"/>
+  <line x1="130" y1="205" x2="170" y2="205" stroke="#047857" stroke-width="10" stroke-linecap="round" opacity="0.35"/>
+  <circle cx="347" cy="165" r="36" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="10"/>
+  <line x1="373" y1="191" x2="395" y2="213" stroke="rgba(255,255,255,0.95)" stroke-width="10" stroke-linecap="round"/>
+  <rect x="130" y="310" width="70" height="10" rx="5" fill="#047857" opacity="0.7"/>
+  <rect x="130" y="335" width="50" height="10" rx="5" fill="#047857" opacity="0.45"/>
+  <rect x="130" y="360" width="60" height="10" rx="5" fill="#047857" opacity="0.3"/>
+  <circle cx="347" cy="347" r="42" fill="url(#accent)" opacity="0.9"/>
+  <line x1="332" y1="347" x2="362" y2="347" stroke="white" stroke-width="7" stroke-linecap="round"/>
+  <line x1="347" y1="332" x2="347" y2="362" stroke="white" stroke-width="7" stroke-linecap="round"/>
+</svg>

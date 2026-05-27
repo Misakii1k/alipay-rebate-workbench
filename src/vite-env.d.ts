@@ -7,6 +7,9 @@ declare global {
   interface Window {
     alipayWorkbench: AlipayWorkbenchApi & WindowControls;
   }
+  interface Document {
+    startViewTransition?: (callback: () => void) => { ready: Promise<void>; finished: Promise<void>; };
+  }
 }
 
 declare namespace Electron {

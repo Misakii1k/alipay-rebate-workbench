@@ -1,28 +1,80 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy, FolderOpen, Image as ImageIcon, Loader2, Search, Sparkles, WandSparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Check, ChevronDown, Copy, Edit3, FolderOpen, Hammer, Image as ImageIcon,
+  Loader2, RefreshCw, RotateCcw, Search, Sparkles, Star, StarOff, Trash2, WandSparkles, X
+} from "lucide-react";
 import clsx from "clsx";
-import type { AppSettings, ReviewGenerationOptions, ReviewSearchResult } from "./lib/shared";
+import type { AppSettings, ReviewGenerationOptions, ReviewSearchResult, ReviewThinkingEffort, ReviewThinkingMode, ReviewWorkspaceMode } from "./lib/shared";
+import { getReviewApiProfile } from "./lib/shared";
+
+const REVIEW_INITIAL_VISIBLE = 36;
+const REVIEW_LOAD_STEP = 24;
+const REVIEW_THUMBNAIL_BATCH = 18;
+const RECENT_QUERIES_KEY = "review-recent-queries";
+const MAX_RECENT_QUERIES = 8;
+
+interface ReviewSessionState {
+  query: string;
+  searched: boolean;
+  results: ReviewSearchResult[];
+  visibleCount: number;
+  selected: string[];
+  preview: ReviewSearchResult | null;
+  copies: string[];
+  batchSeed: number;
+}
+
+let reviewSessionState: ReviewSessionState | null = null;
+
+interface ScanProgress {
+  scanned: number;
+  currentDir: string;
+  phase: string;
+  elapsedMs?: number;
+}
 
 export function ReviewAssistant({
   settings,
   onSaveSettings,
-  showToast
+  showToast,
+  modelConnected = false
 }: {
   settings: AppSettings;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
   showToast: (message: string) => void;
+  modelConnected?: boolean;
 }) {
-  const [query, setQuery] = useState("");
-  const [searched, setSearched] = useState(false);
+  const [query, setQuery] = useState(() => reviewSessionState?.query ?? "");
+  const [searched, setSearched] = useState(() => reviewSessionState?.searched ?? false);
   const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<ReviewSearchResult[]>([]);
-  const [expanded, setExpanded] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [preview, setPreview] = useState<ReviewSearchResult | null>(null);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [results, setResults] = useState<ReviewSearchResult[]>(() => reviewSessionState?.results ?? []);
+  const [visibleCount, setVisibleCount] = useState(() => reviewSessionState?.visibleCount ?? REVIEW_INITIAL_VISIBLE);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [selected, setSelected] = useState<string[]>(() => reviewSessionState?.selected ?? []);
+  const [preview, setPreview] = useState<ReviewSearchResult | null>(() => reviewSessionState?.preview ?? null);
   const [generating, setGenerating] = useState(false);
-  const [copies, setCopies] = useState<string[]>([]);
-  const [vipConfirmed, setVipConfirmed] = useState(false);
-  const [batchSeed, setBatchSeed] = useState(1);
+  const [copies, setCopies] = useState<string[]>(() => reviewSessionState?.copies ?? []);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const [apiConfirmed, setVipConfirmed] = useState(false);
+  const [batchSeed, setBatchSeed] = useState(() => reviewSessionState?.batchSeed ?? 1);
+  const [customPrompt, setCustomPrompt] = useState(settings.reviewCustomPrompt ?? "");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [mode, setModeState] = useState<ReviewWorkspaceMode>(settings.reviewWorkspaceMode);
+  const [availableModels, setAvailableModels] = useState<{ id: string; name: string }[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState(() => {
+    const profile = getReviewApiProfile(settings);
+    return profile.textModel;
+  });
+  const [recentQueries, setRecentQueries] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(RECENT_QUERIES_KEY);
+      return raw ? (JSON.parse(raw) as string[]).slice(0, MAX_RECENT_QUERIES) : [];
+    } catch { return []; }
+  });
   const [options, setOptions] = useState({
     emojiLevel: settings.reviewEmojiLevel,
     professionalLevel: settings.reviewProfessionalLevel,
@@ -30,25 +82,69 @@ export function ReviewAssistant({
     exaggerationLevel: settings.reviewExaggerationLevel,
     sceneLevel: settings.reviewSceneLevel,
     mentionValue: settings.reviewMentionValue,
-    productDescription: settings.reviewProductDescription
+    productDescription: settings.reviewProductDescription,
+    targetLength: settings.reviewTargetLength,
+    thinkingMode: settings.reviewThinkingMode,
+    thinkingEffort: settings.reviewThinkingEffort
   });
-  const searchTimerRef = useRef<number>(0);
+  const loadMoreTimerRef = useRef<number>(0);
+  const copyListRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const visibleResults = useMemo(() => (expanded ? results : results.slice(0, 36)), [expanded, results]);
-  const rootLabel = settings.reviewRootDir ? compactPath(settings.reviewRootDir) : "尚未选择图片根目录";
-
-  useEffect(() => {
-    if (!searched || !results.length) return;
-    let canceled = false;
-    const missingPaths = visibleResults
+  const visibleResults = useMemo(() => results.slice(0, visibleCount), [results, visibleCount]);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const selectablePaths = useCallback((item: ReviewSearchResult) => {
+    if (item.kind === "folder" && item.children?.length) return item.children.map((child) => child.path);
+    return [item.path];
+  }, []);
+  const visiblePathGroups = useMemo(() => {
+    return new Map(visibleResults.map((item) => [item.path, selectablePaths(item)]));
+  }, [selectablePaths, visibleResults]);
+  const visibleSelectedKeys = useMemo(() => {
+    const keys = new Set<string>();
+    visiblePathGroups.forEach((paths, key) => {
+      if (paths.some((path) => selectedSet.has(path))) keys.add(key);
+    });
+    return keys;
+  }, [selectedSet, visiblePathGroups]);
+  const selectedCardCount = visibleSelectedKeys.size;
+  const thumbnailLoadKey = useMemo(() => {
+    return visibleResults
       .flatMap((item) => {
         if (item.kind === "image" && !item.thumbnailDataUrl) return [item.path];
         if (item.kind === "folder" && item.children) return item.children.filter((c) => !c.thumbnailDataUrl).map((c) => c.path);
         return [];
       })
-      .slice(0, 40);
+      .slice(0, REVIEW_THUMBNAIL_BATCH)
+      .join("|");
+  }, [visibleResults]);
+  const rootLabel = settings.reviewRootDir ? compactPath(settings.reviewRootDir) : "尚未选择图片根目录";
+  const savedCopies = useMemo(() => settings.reviewSavedCopies ?? [], [settings.reviewSavedCopies]);
+
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(loadMoreTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    reviewSessionState = { query, searched, results, visibleCount, selected, preview, copies, batchSeed };
+  }, [batchSeed, copies, preview, query, results, searched, selected, visibleCount]);
+
+  useEffect(() => {
+    const off = window.alipayWorkbench.onReviewScanProgress?.((progress) => {
+      setScanProgress(progress);
+    });
+    return () => off?.();
+  }, []);
+
+  useEffect(() => {
+    if (!searched || !results.length) return;
+    let canceled = false;
+    const missingPaths = thumbnailLoadKey.split("|").filter(Boolean);
     if (!missingPaths.length) return;
-    void window.alipayWorkbench.loadReviewThumbnails(missingPaths).then((thumbMap) => {
+    const loader = window.alipayWorkbench.loadReviewThumbnailBatch || window.alipayWorkbench.loadReviewThumbnails;
+    void loader(missingPaths).then((thumbMap: Record<string, string>) => {
       if (canceled) return;
       setResults((prev) =>
         prev.map((item) => {
@@ -62,7 +158,64 @@ export function ReviewAssistant({
       );
     });
     return () => { canceled = true; };
-  }, [searched, visibleResults.length, expanded]);
+  }, [searched, thumbnailLoadKey, results.length]);
+
+  function recordRecentQuery(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    setRecentQueries((prev) => {
+      const next = [trimmed, ...prev.filter((item) => item !== trimmed)].slice(0, MAX_RECENT_QUERIES);
+      try { localStorage.setItem(RECENT_QUERIES_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  async function loadModels() {
+    setLoadingModels(true);
+    try {
+      const models = await window.alipayWorkbench.listAvailableModels(settings);
+      setAvailableModels(models);
+      if (models.length) showToast(`已获取 ${models.length} 个可用模型。`);
+      else showToast("未获取到模型列表，请检查 API 配置。");
+    } catch {
+      showToast("获取模型列表失败，请检查 API 配置。");
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  async function handleModelChange(modelId: string) {
+    setSelectedModelId(modelId);
+    const profile = getReviewApiProfile(settings);
+    const profiles = settings.apiProfiles.map((p) =>
+      p.id === profile.id ? { ...p, textModel: modelId, visionModel: modelId } : p
+    );
+    await onSaveSettings({ ...settings, apiProfiles: profiles });
+  }
+
+  async function handleCustomPromptSave() {
+    await onSaveSettings({ ...settings, reviewCustomPrompt: customPrompt });
+    showToast("自定义提示词已保存。");
+  }
+
+  async function setMode(nextMode: ReviewWorkspaceMode) {
+    setModeState(nextMode);
+    await onSaveSettings({ ...settings, reviewWorkspaceMode: nextMode });
+  }
+
+  async function toggleScoring(enabled: boolean) {
+    await onSaveSettings({ ...settings, reviewScoringEnabled: enabled });
+    showToast(enabled ? "已开启相关性评分。" : "已关闭相关性评分，搜索会更轻量。");
+  }
+
+  function clearContext() {
+    setSelected([]);
+    setCopies([]);
+    setBatchSeed(1);
+    setVipConfirmed(false);
+    setPreview(results[0] ?? null);
+    showToast("上下文已清空，可以开始新一轮生成。");
+  }
 
   async function ensureRoot() {
     if (settings.reviewRootDir) return settings.reviewRootDir;
@@ -72,44 +225,81 @@ export function ReviewAssistant({
     return result.paths[0];
   }
 
-  async function searchAssets() {
-    if (!query.trim()) {
+  async function searchAssets(overrideQuery?: string) {
+    const q = (overrideQuery ?? query).trim();
+    if (!q) {
       showToast("请输入要检索的商品名、颜色或型号。");
       return;
     }
+    if (overrideQuery !== undefined) setQuery(overrideQuery);
     const root = await ensureRoot();
     if (!root) return;
+    window.clearTimeout(loadMoreTimerRef.current);
     setSearching(true);
     setSearched(true);
+    setScanProgress({ scanned: 0, currentDir: "", phase: "start" });
     try {
-      const found = await window.alipayWorkbench.scanReviewAssets(root, query.trim());
+      const found = await window.alipayWorkbench.scanReviewAssets(root, q, settings);
       setResults(found);
       setSelected([]);
+      setVisibleCount(REVIEW_INITIAL_VISIBLE);
+      setLoadingMore(false);
       setPreview(found[0] ?? null);
+      recordRecentQuery(q);
       showToast(found.length ? `检索到 ${found.length} 个相关图片。` : "没有找到相关图片。");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "检索失败");
     } finally {
       setSearching(false);
+      window.setTimeout(() => setScanProgress(null), 1200);
     }
   }
 
-  function handleQueryChange(value: string) {
-    setQuery(value);
-    window.clearTimeout(searchTimerRef.current);
-  }
-
-  function selectablePaths(item: ReviewSearchResult) {
-    if (item.kind === "folder" && item.children?.length) return item.children.map((child) => child.path);
-    return [item.path];
+  async function rebuildIndex() {
+    const root = settings.reviewRootDir;
+    if (!root) {
+      showToast("请先选择图片根目录。");
+      return;
+    }
+    setSearching(true);
+    setScanProgress({ scanned: 0, currentDir: "", phase: "start" });
+    try {
+      const result = await window.alipayWorkbench.rebuildReviewIndex(root);
+      if (result.ok) showToast(`索引重建完成，共 ${result.total} 张图片。`);
+      else showToast("索引重建失败，请检查目录权限。");
+    } finally {
+      setSearching(false);
+      window.setTimeout(() => setScanProgress(null), 1200);
+    }
   }
 
   function toggle(item: ReviewSearchResult) {
-    const paths = selectablePaths(item);
+    const paths = visiblePathGroups.get(item.path) ?? selectablePaths(item);
     setSelected((prev) => {
-      const allSelected = paths.every((path) => prev.includes(path));
+      const prevSet = new Set(prev);
+      const allSelected = paths.every((path) => prevSet.has(path));
       return allSelected ? prev.filter((path) => !paths.includes(path)) : [...new Set([...prev, ...paths])];
     });
+  }
+
+  function selectAllVisible() {
+    const all = visibleResults.flatMap(selectablePaths);
+    setSelected([...new Set(all)]);
+  }
+
+  function dragPathsFor(item: ReviewSearchResult) {
+    const paths = visiblePathGroups.get(item.path) ?? selectablePaths(item);
+    return paths.some((path) => selectedSet.has(path)) && selected.length ? selected : paths;
+  }
+
+  function loadMoreResults() {
+    if (loadingMore || visibleCount >= results.length) return;
+    setLoadingMore(true);
+    window.clearTimeout(loadMoreTimerRef.current);
+    loadMoreTimerRef.current = window.setTimeout(() => {
+      setVisibleCount((count) => Math.min(count + REVIEW_LOAD_STEP, results.length));
+      setLoadingMore(false);
+    }, 90);
   }
 
   async function pickRoot() {
@@ -120,13 +310,13 @@ export function ReviewAssistant({
   }
 
   async function generate(nextBatch = false) {
-    if (!selected.length) {
+    if (!selected.length && mode !== "ai") {
       showToast("请先选择至少一张参考图片。");
       return;
     }
-    if (!vipConfirmed) {
+    if (!apiConfirmed && !modelConnected) {
       setVipConfirmed(true);
-      showToast("高级版/VIP AI 功能将调用大模型 API，请确认 API 配置可用。");
+      showToast("AI 生成功能将调用大模型 API，请确认 API 配置可用。");
       return;
     }
     const seed = nextBatch ? batchSeed + 1 : batchSeed;
@@ -137,6 +327,9 @@ export function ReviewAssistant({
         query,
         selectedPaths: selected,
         productDescription: options.productDescription,
+        targetLength: options.targetLength,
+        thinkingMode: options.thinkingMode,
+        thinkingEffort: options.thinkingEffort,
         emojiLevel: options.emojiLevel,
         professionalLevel: options.professionalLevel,
         buyerLevel: options.buyerLevel,
@@ -147,6 +340,7 @@ export function ReviewAssistant({
       };
       const result = await window.alipayWorkbench.generateReviewCopy(settings, payload);
       setCopies(result.copies);
+      requestAnimationFrame(() => copyListRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
       await onSaveSettings({
         ...settings,
         reviewEmojiLevel: options.emojiLevel,
@@ -155,7 +349,10 @@ export function ReviewAssistant({
         reviewExaggerationLevel: options.exaggerationLevel,
         reviewSceneLevel: options.sceneLevel,
         reviewMentionValue: options.mentionValue,
-        reviewProductDescription: options.productDescription
+        reviewProductDescription: options.productDescription,
+        reviewTargetLength: options.targetLength,
+        reviewThinkingMode: options.thinkingMode,
+        reviewThinkingEffort: options.thinkingEffort
       });
     } catch (error) {
       showToast(error instanceof Error ? error.message : "AI 生成失败");
@@ -164,129 +361,333 @@ export function ReviewAssistant({
     }
   }
 
-  function resetCycle() {
-    setSelected([]);
-    setCopies([]);
-    setPreview(results[0] ?? null);
+  async function copyToClipboard(text: string) {
+    await window.alipayWorkbench.writeClipboardText(text);
+    showToast("文案已复制。");
+  }
+
+  async function copyAll() {
+    if (!copies.length) return;
+    const all = copies.map((c, i) => `${i + 1}. ${c}`).join("\n");
+    await window.alipayWorkbench.writeClipboardText(all);
+    showToast(`已复制全部 ${copies.length} 条文案。`);
+  }
+
+  function startEditCopy(index: number) {
+    setEditingIndex(index);
+    setEditingText(copies[index] || "");
+  }
+
+  function saveEditCopy() {
+    if (editingIndex === null) return;
+    setCopies((prev) => prev.map((c, i) => (i === editingIndex ? editingText : c)));
+    setEditingIndex(null);
+    setEditingText("");
+    showToast("文案已修改。");
+  }
+
+  async function toggleStarCopy(text: string) {
+    const list = settings.reviewSavedCopies ?? [];
+    const isStarred = list.includes(text);
+    const next = isStarred ? list.filter((c) => c !== text) : [text, ...list].slice(0, 200);
+    await onSaveSettings({ ...settings, reviewSavedCopies: next });
+    showToast(isStarred ? "已取消收藏。" : "已收藏到我的文案。");
+  }
+
+  async function removeSavedCopy(text: string) {
+    const next = (settings.reviewSavedCopies ?? []).filter((c) => c !== text);
+    await onSaveSettings({ ...settings, reviewSavedCopies: next });
   }
 
   return (
-    <section className={clsx("review-assistant", searched && "searched")}>
-      <div className="review-search-shell">
-        <div className="review-hero-title">
-          <span><Sparkles size={22} /></span>
-          <strong>收评助手</strong>
-          <em>按商品名检索参考图，AI 生成更自然的买家好评文案</em>
-        </div>
+    <section className={clsx("review-assistant review-v2", searched && "searched")}>
+      <ReviewHero
+        mode={mode}
+        onModeChange={(nextMode) => void setMode(nextMode)}
+        scoringEnabled={settings.reviewScoringEnabled}
+        onToggleScoring={(enabled) => void toggleScoring(enabled)}
+        query={query}
+        setQuery={setQuery}
+        onSearch={() => void searchAssets()}
+        searching={searching}
+        recentQueries={recentQueries}
+        onPickRecent={(q) => void searchAssets(q)}
+        onPickRoot={pickRoot}
+        rootLabel={rootLabel}
+        onRebuildIndex={() => void rebuildIndex()}
+        inputRef={inputRef}
+      />
 
-        <div className="review-search-card">
-          <div className="review-card-meta">
-            <span>素材检索</span>
-            <strong>{selected.length} 已选</strong>
-            <strong>{results.length} 结果</strong>
-          </div>
+      {(searching || scanProgress) && (
+        <ReviewScanProgressBar progress={scanProgress} searching={searching} />
+      )}
 
-          <div className="review-search-box">
-            <Search size={20} />
-            <input
-              value={query}
-              onChange={(event) => handleQueryChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void searchAssets();
-              }}
-              placeholder="搜索商品、颜色或型号，例如：彩棉317"
+      {(mode === "search" || mode === "mixed") && searched && (
+        <div className="review-v2-workspace">
+          <div className="review-v2-results-col">
+            <ReviewToolbar
+              selectedImages={selected.length}
+              selectedCards={selectedCardCount}
+              totalResults={results.length}
+              visibleCount={Math.min(visibleCount, results.length)}
+              onSelectAll={selectAllVisible}
+              onClear={() => setSelected([])}
+              searching={searching}
             />
-            <button onClick={searchAssets} disabled={searching}>{searching ? <Loader2 className="spin" size={18} /> : "搜索"}</button>
+
+            {results.length === 0 && !searching && <ReviewEmptyState query={query} />}
+
+            <ReviewResultGrid
+              items={visibleResults}
+              scoringEnabled={settings.reviewScoringEnabled}
+              selectedKeys={visibleSelectedKeys}
+              onToggle={(item) => { toggle(item); setPreview(item); }}
+              onPreview={setPreview}
+              dragPathsFor={dragPathsFor}
+            />
+
+            {results.length > visibleCount && (
+              <button className="review-v2-load-more" onClick={loadMoreResults} disabled={loadingMore}>
+                {loadingMore ? <Loader2 className="spin" size={16} /> : null}
+                加载更多（剩余 {results.length - visibleCount} 个）
+              </button>
+            )}
           </div>
 
-          <button className="review-root-pill" onClick={pickRoot}>
-            <FolderOpen size={16} />
-            <span>图片根目录</span>
-            <strong>{rootLabel}</strong>
-            <em>更改</em>
-          </button>
-        </div>
-      </div>
-
-      {searched && (
-        <div className="review-workspace">
-          <div className="review-results">
-            <div className="review-status">{searching ? "开始检索..." : `按匹配度展示 ${results.length} 个结果`}</div>
-            <div className="review-file-grid">
-              {visibleResults.map((item) => (
-                <button
-                  key={item.path}
-                  className={clsx(selectablePaths(item).some((path) => selected.includes(path)) && "selected")}
-                  draggable
-                  onClick={() => {
-                    toggle(item);
-                    setPreview(item);
-                  }}
-                  onDragStart={(event) => {
-                    const paths = selectablePaths(item);
-                    event.dataTransfer.setData("text/uri-list", paths.join("\n"));
-                    event.dataTransfer.setData("text/plain", paths.join("\n"));
-                  }}
-                >
-                  <span className="review-thumb">{item.thumbnailDataUrl ? <img src={item.thumbnailDataUrl} /> : <ImageIcon size={26} />}</span>
-                  <strong>{item.name}</strong>
-                  <em>{item.score} · {item.reason}</em>
-                </button>
-              ))}
-            </div>
-            {results.length > 36 && <button className="secondary-action light full" onClick={() => setExpanded((value) => !value)}>{expanded ? "收起" : "展开更多"}</button>}
-          </div>
-
-          <aside className="review-preview">
-            {preview?.thumbnailDataUrl ? <img src={preview.thumbnailDataUrl} /> : <div className="empty">选择图片后预览</div>}
-            <div><strong>{preview?.name || "未选择"}</strong><span>{preview?.path || ""}</span></div>
-          </aside>
+          <ReviewPreviewPanel preview={preview} selectedImages={selected.length} selectedCards={selectedCardCount} scoringEnabled={settings.reviewScoringEnabled} />
         </div>
       )}
 
-      {searched && (
-        <div className="review-ai-panel">
-          <div className="review-ai-title"><WandSparkles size={20} /> AI生成好评 <span>高级版 VIP</span></div>
-          <div className="review-controls">
-            <Slider label="Emoji程度" value={options.emojiLevel} onChange={(value) => setOptions((prev) => ({ ...prev, emojiLevel: value }))} />
-            <Slider label="专业程度" value={options.professionalLevel} onChange={(value) => setOptions((prev) => ({ ...prev, professionalLevel: value }))} />
-            <Slider label="买家视角" value={options.buyerLevel} onChange={(value) => setOptions((prev) => ({ ...prev, buyerLevel: value }))} />
-            <Slider label="语气夸张" value={options.exaggerationLevel} onChange={(value) => setOptions((prev) => ({ ...prev, exaggerationLevel: value }))} />
-            <Slider label="场景化表达" value={options.sceneLevel} onChange={(value) => setOptions((prev) => ({ ...prev, sceneLevel: value }))} />
-            <label className="review-check"><input type="checkbox" checked={options.mentionValue} onChange={(event) => setOptions((prev) => ({ ...prev, mentionValue: event.target.checked }))} /> 加入性价比表达</label>
-            <textarea value={options.productDescription} onChange={(event) => setOptions((prev) => ({ ...prev, productDescription: event.target.value }))} placeholder="补充商品描述，让好评更贴合" />
-          </div>
-          <div className="button-row review-buttons">
-            <button className="primary" onClick={() => generate(false)} disabled={generating}>{generating ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />} AI生成好评文案</button>
-            <button className="secondary-action" onClick={() => generate(true)} disabled={generating || !copies.length}>换一批</button>
-            <button className="secondary-action light" onClick={resetCycle}>完成并重置</button>
-          </div>
-          <div className="review-copy-list">
-            {copies.map((copy, index) => (
-              <button key={`${copy}-${index}`} onClick={() => { void window.alipayWorkbench.writeClipboardText(copy); showToast("文案已复制。"); }}>
-                <Copy size={16} />
-                <span>{copy}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+      {(mode === "ai" || mode === "mixed") && (
+        <ReviewAIPanel
+          query={query}
+          setQuery={setQuery}
+          options={options}
+          setOptions={setOptions}
+          customPrompt={customPrompt}
+          setCustomPrompt={setCustomPrompt}
+          onSaveCustomPrompt={() => void handleCustomPromptSave()}
+          advancedOpen={advancedOpen}
+          setAdvancedOpen={setAdvancedOpen}
+          availableModels={availableModels}
+          selectedModelId={selectedModelId}
+          onModelChange={(id) => void handleModelChange(id)}
+          loadingModels={loadingModels}
+          onLoadModels={() => void loadModels()}
+          onGenerate={() => generate(false)}
+          onNextBatch={() => generate(true)}
+          generating={generating}
+          hasCopies={copies.length > 0}
+          canGenerate={selected.length > 0 || mode === "ai"}
+          onClearContext={clearContext}
+        />
+      )}
+
+      {(mode === "ai" || mode === "mixed") && copies.length > 0 && (
+        <ReviewCopyResultList
+          copies={copies}
+          savedCopies={savedCopies}
+          editingIndex={editingIndex}
+          editingText={editingText}
+          onSetEditingText={setEditingText}
+          onStartEdit={startEditCopy}
+          onSaveEdit={saveEditCopy}
+          onCancelEdit={() => { setEditingIndex(null); setEditingText(""); }}
+          onCopy={(text) => void copyToClipboard(text)}
+          onCopyAll={() => void copyAll()}
+          onToggleStar={(text) => void toggleStarCopy(text)}
+          copyListRef={copyListRef}
+        />
+      )}
+
+      {(mode === "ai" || mode === "mixed") && savedCopies.length > 0 && (
+        <ReviewSavedCopies
+          savedCopies={savedCopies}
+          open={historyOpen}
+          onToggle={() => setHistoryOpen((v) => !v)}
+          onCopy={(text) => void copyToClipboard(text)}
+          onRemove={(text) => void removeSavedCopy(text)}
+        />
       )}
     </section>
   );
 }
 
+function ReviewHero({
+  mode, onModeChange, scoringEnabled, onToggleScoring,
+  query, setQuery, onSearch, searching, recentQueries, onPickRecent, onPickRoot, rootLabel, onRebuildIndex, inputRef
+}: {
+  mode: ReviewWorkspaceMode;
+  onModeChange: (mode: ReviewWorkspaceMode) => void;
+  scoringEnabled: boolean;
+  onToggleScoring: (enabled: boolean) => void;
+  query: string;
+  setQuery: (v: string) => void;
+  onSearch: () => void;
+  searching: boolean;
+  recentQueries: string[];
+  onPickRecent: (q: string) => void;
+  onPickRoot: () => void;
+  rootLabel: string;
+  onRebuildIndex: () => void;
+  inputRef: React.RefObject<HTMLInputElement>;
+}) {
+  return (
+    <div className="review-v2-hero">
+      <div className="review-v2-hero-head">
+        <Sparkles size={22} />
+        <strong>收评助手</strong>
+        <em>按商品名检索参考图，AI 生成更自然的买家好评文案</em>
+        <div className="review-v2-mode-switch">
+          {([
+            ["mixed", "混合模式"],
+            ["search", "搜索模式"],
+            ["ai", "AI评价模式"]
+          ] as Array<[ReviewWorkspaceMode, string]>).map(([value, label]) => (
+            <button key={value} className={clsx(mode === value && "active")} onClick={() => onModeChange(value)}>{label}</button>
+          ))}
+          {mode !== "ai" && (
+            <label className="review-v2-score-toggle" title={scoringEnabled ? "相关性评分已开启" : "相关性评分已关闭"}>
+              <input type="checkbox" checked={scoringEnabled} onChange={(event) => onToggleScoring(event.target.checked)} />
+              <span>相关性评分</span>
+              <em>{scoringEnabled ? "优先高相关" : "关闭省性能"}</em>
+            </label>
+          )}
+        </div>
+      </div>
+
+      {mode !== "ai" && (
+        <div className="review-v2-search">
+          <div className="review-v2-search-input">
+            <Search size={20} />
+            <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onSearch(); }} placeholder="搜索商品、颜色或型号，例如：彩棉317" />
+            <button className="review-v2-search-btn" onClick={onSearch} disabled={searching}>{searching ? <Loader2 className="spin" size={18} /> : "??"}</button>
+          </div>
+          <div className="review-v2-meta-row">
+            <button className="review-v2-root-pill" onClick={onPickRoot}><FolderOpen size={14} /><span>{rootLabel}</span><em>??</em></button>
+            <button className="review-v2-root-pill ghost" onClick={onRebuildIndex} title="忽略缓存，重新扫描全目录"><Hammer size={14} /><span>重建索引</span></button>
+          </div>
+        </div>
+      )}
+
+      {recentQueries.length > 0 && mode !== "ai" && (
+        <div className="review-v2-recent">
+          <span className="review-v2-recent-label">最近搜索</span>
+          {recentQueries.map((q) => <button key={q} className="review-v2-recent-chip" onClick={() => onPickRecent(q)}>{q}</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReviewScanProgressBar({ progress, searching }: { progress: ScanProgress | null; searching: boolean }) {
+  if (!progress && !searching) return null;
+  const phase = progress?.phase || "start";
+  const phaseLabel: Record<string, string> = { start: "开始扫描", walking: "扫描目录中", indexed: "索引完成", "loaded-cache": "命中缓存", scoring: "正在打分", done: "完成" };
+  return (
+    <div className={clsx("review-v2-progress", phase === "done" && "done")}>
+      <Loader2 className={clsx(searching && "spin")} size={14} />
+      <span className="review-v2-progress-phase">{phaseLabel[phase] || phase}</span>
+      {progress?.scanned ? <strong>{progress.scanned.toLocaleString()} 个文件</strong> : null}
+      {progress?.currentDir ? <em className="review-v2-progress-dir">{compactPath(progress.currentDir)}</em> : null}
+    </div>
+  );
+}
+
+function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCount, onSelectAll, onClear, searching }: { selectedImages: number; selectedCards: number; totalResults: number; visibleCount: number; onSelectAll: () => void; onClear: () => void; searching: boolean; }) {
+  return (
+    <div className="review-v2-toolbar">
+      <span className="review-v2-toolbar-status">{searching ? "正在检索" : totalResults > 0 ? "按匹配度展示 " + visibleCount + " / " + totalResults : "无结果"}</span>
+      <div className="review-v2-toolbar-actions">
+        {selectedImages > 0 && (<><span className="review-v2-selected-chip review-v2-selected-chip-readable"><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span><span className="review-v2-drag-hint">拖拽缩略图即可同时移动全部所选</span><button className="review-v2-toolbar-btn" onClick={onClear}>清空选中</button></>)}
+        {totalResults > 0 && selectedImages === 0 && <button className="review-v2-toolbar-btn" onClick={onSelectAll}>全选可见</button>}
+      </div>
+    </div>
+  );
+}
+
+function ReviewEmptyState({ query }: { query: string }) {
+  return <div className="review-v2-empty"><ImageIcon size={48} /><strong>{query ? "没有找到“" + query + "”相关图片" : "未搜索"}</strong><span>试试换个关键词，或检查图片根目录是否正确。</span></div>;
+}
+
+function ReviewResultGrid({ items, scoringEnabled = true, selectedKeys, onToggle, onPreview, dragPathsFor }: { items: ReviewSearchResult[]; scoringEnabled?: boolean; selectedKeys: Set<string>; onToggle: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; }) {
+  return (
+    <div className="review-v2-grid">
+      {items.map((item) => {
+        const isFolder = item.kind === "folder";
+        const isSelected = selectedKeys.has(item.path);
+        return (
+          <button key={item.path} className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
+            <div className="review-v2-thumb">
+              {item.thumbnailDataUrl ? <img src={item.thumbnailDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
+              {isFolder && item.children && item.children.length > 1 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {item.children.length}</span>}
+              {scoringEnabled && <span className="review-v2-score">{item.score}</span>}
+              {isSelected && <span className="review-v2-check"><Check size={14} /></span>}
+            </div>
+            <strong className="review-v2-name">{item.name}</strong><em className="review-v2-reason">{item.reason}</em>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReviewPreviewPanel({ preview, selectedImages, selectedCards, scoringEnabled = true }: { preview: ReviewSearchResult | null; selectedImages: number; selectedCards: number; scoringEnabled?: boolean }) {
+  return (
+    <aside className="review-v2-preview">
+      <div className="review-v2-preview-image">{preview?.thumbnailDataUrl ? <img src={preview.thumbnailDataUrl} alt={preview.name} /> : <div className="review-v2-preview-empty"><ImageIcon size={32} /><span>选择图片后预览</span></div>}</div>
+      <div className="review-v2-preview-info">
+        <strong>{preview?.name || "未选择"}</strong><span>{preview?.path || ""}</span>
+        {preview?.kind === "folder" && preview.children && <em>文件夹包含 {preview.children.length} 张图</em>}
+        <div className="review-v2-preview-stats"><span><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span>{scoringEnabled && preview?.score !== undefined && <span><Star size={12} /> 评分 {preview.score}</span>}</div>
+      </div>
+    </aside>
+  );
+}
+
+function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onGenerate, onNextBatch, generating, hasCopies, canGenerate, onClearContext }: { query: string; setQuery: (value: string) => void; options: { emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }; setOptions: React.Dispatch<React.SetStateAction<{ emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onGenerate: () => void; onNextBatch: () => void; generating: boolean; hasCopies: boolean; canGenerate: boolean; onClearContext: () => void; }) {
+  return (
+    <section className="review-v2-ai-panel">
+      <div className="review-v2-ai-head"><WandSparkles size={18} /><strong>AI 生成好评</strong><span className="review-v2-ai-tag">高级功能</span><div className="review-v2-ai-model"><select value={selectedModelId} onChange={(e) => onModelChange(e.target.value)}>{availableModels.length === 0 && <option value={selectedModelId}>{selectedModelId || "未选择模型"}</option>}{availableModels.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select><button className="review-v2-ai-refresh" onClick={onLoadModels} disabled={loadingModels} title="刷新可用模型">{loadingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}</button></div></div>
+      <div className="review-v2-sliders">
+        <label className="review-v2-desc review-v2-query-field"><span>商品/搜索词</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="例如：彩棉317 夏季长裤" /></label>
+        <label className="review-v2-desc review-v2-length-field"><span>目标字数：{options.targetLength}</span><input type="range" min={30} max={300} step={5} value={options.targetLength} onChange={(e) => setOptions((p) => ({ ...p, targetLength: Number(e.target.value) }))} /></label>
+        <SliderCompact label="Emoji" value={options.emojiLevel} onChange={(v) => setOptions((p) => ({ ...p, emojiLevel: v }))} />
+        <SliderCompact label="专业" value={options.professionalLevel} onChange={(v) => setOptions((p) => ({ ...p, professionalLevel: v }))} />
+        <SliderCompact label="买家味" value={options.buyerLevel} onChange={(v) => setOptions((p) => ({ ...p, buyerLevel: v }))} />
+        <SliderCompact label="夸张度" value={options.exaggerationLevel} onChange={(v) => setOptions((p) => ({ ...p, exaggerationLevel: v }))} />
+        <SliderCompact label="场景化" value={options.sceneLevel} onChange={(v) => setOptions((p) => ({ ...p, sceneLevel: v }))} />
+        <label className="review-v2-toggle"><span>性价比</span><input type="checkbox" checked={options.mentionValue} onChange={(e) => setOptions((p) => ({ ...p, mentionValue: e.target.checked }))} /><span className="review-v2-toggle-track"><span className="review-v2-toggle-thumb" /></span></label>
+      </div>
+      <div className="review-v2-thinking-row"><label><span>思考模式</span><select value={options.thinkingMode} onChange={(e) => setOptions((p) => ({ ...p, thinkingMode: e.target.value as ReviewThinkingMode }))}><option value="off">关闭</option><option value="fast">快速</option><option value="balanced">均衡</option><option value="deep">深度</option></select></label><label><span>思考程度</span><select value={options.thinkingEffort} onChange={(e) => setOptions((p) => ({ ...p, thinkingEffort: e.target.value as ReviewThinkingEffort }))}><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label></div>
+      <label className="review-v2-desc"><span>商品描述补充</span><textarea value={options.productDescription} onChange={(e) => setOptions((p) => ({ ...p, productDescription: e.target.value }))} placeholder="补充商品卖点，让好评更贴合（可选）" /></label>
+      <button className="review-v2-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}><ChevronDown size={14} className={clsx("review-v2-chev", advancedOpen && "open")} />高级：自定义提示词</button>
+      {advancedOpen && <label className="review-v2-desc"><span>自定义提示词（追加在系统指令后）</span><textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} onBlur={onSaveCustomPrompt} placeholder="例如：多用口语化表达，不要使用书面语" /></label>}
+      <div className="review-v2-buttons"><button className="review-v2-primary" onClick={onGenerate} disabled={generating || !canGenerate || !query.trim()}>{generating ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />}{hasCopies ? "重新生成" : "AI 生成好评"}</button><button className="review-v2-secondary" onClick={onNextBatch} disabled={generating || !hasCopies}>换一批</button><button className="review-v2-ghost" onClick={onClearContext}><RotateCcw size={14} /> 清空</button></div>
+      {generating && <div className="review-v2-gen-status"><Loader2 className="spin" size={14} /> AI 正在生成文案，请稍候</div>}
+    </section>
+  );
+}
+
+function ReviewCopyResultList({ copies, savedCopies, editingIndex, editingText, onSetEditingText, onStartEdit, onSaveEdit, onCancelEdit, onCopy, onCopyAll, onToggleStar, copyListRef }: { copies: string[]; savedCopies: string[]; editingIndex: number | null; editingText: string; onSetEditingText: (v: string) => void; onStartEdit: (index: number) => void; onSaveEdit: () => void; onCancelEdit: () => void; onCopy: (text: string) => void; onCopyAll: () => void; onToggleStar: (text: string) => void; copyListRef: React.RefObject<HTMLDivElement>; }) {
+  return (
+    <section className="review-v2-copy-section" ref={copyListRef}>
+      <div className="review-v2-copy-head"><strong>已生成 {copies.length} 条文案</strong><span>点击复制 · 编辑改写 · 星标收藏</span><button className="review-v2-copy-all" onClick={onCopyAll}><Copy size={14} /> 复制全部</button></div>
+      <div className="review-v2-copy-list">{copies.map((copy, index) => { const isStarred = savedCopies.includes(copy); const isEditing = editingIndex === index; const charCount = copy.length; return <article key={index + '-' + copy.slice(0, 6)} className="review-v2-copy-card">{!isEditing && <><div className="review-v2-copy-text" onClick={() => onCopy(copy)}><Copy size={14} className="review-v2-copy-icon" /><span>{copy}</span></div><div className="review-v2-copy-meta"><span>{charCount} 字</span><button className="review-v2-copy-action" onClick={() => onStartEdit(index)} title="编辑"><Edit3 size={13} /></button><button className={clsx("review-v2-copy-action", isStarred && "starred")} onClick={() => onToggleStar(copy)} title={isStarred ? "取消收藏" : "收藏"}>{isStarred ? <Star size={13} /> : <StarOff size={13} />}</button></div></>}{isEditing && <div className="review-v2-copy-edit"><textarea value={editingText} onChange={(e) => onSetEditingText(e.target.value)} rows={3} /><div className="review-v2-copy-edit-actions"><button className="review-v2-secondary" onClick={onSaveEdit}>保存</button><button className="review-v2-ghost" onClick={onCancelEdit}>取消</button></div></div>}</article>; })}</div>
+    </section>
+  );
+}
+
+function ReviewSavedCopies({ savedCopies, open, onToggle, onCopy, onRemove }: { savedCopies: string[]; open: boolean; onToggle: () => void; onCopy: (text: string) => void; onRemove: (text: string) => void; }) {
+  return <section className={clsx("review-v2-saved", open && "open")}><button className="review-v2-saved-toggle" onClick={onToggle}><Star size={14} /><strong>我的收藏文案（{savedCopies.length}）</strong><ChevronDown size={14} className={clsx("review-v2-chev", open && "open")} /></button>{open && <div className="review-v2-saved-list">{savedCopies.map((text, i) => <article key={i + '-' + text.slice(0, 6)} className="review-v2-saved-card"><span onClick={() => onCopy(text)}>{text}</span><button className="review-v2-copy-action" onClick={() => onRemove(text)} title="删除"><Trash2 size={13} /></button></article>)}</div>}</section>;
+}
+
+function SliderCompact({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+  return <label className="review-v2-slider"><span className="review-v2-slider-label">{label}</span><input type="range" min={0} max={5} value={value} onChange={(event) => onChange(Number(event.target.value))} /><em className="review-v2-slider-value">{value}</em></label>;
+}
+
 function compactPath(value: string) {
   const parts = value.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 3) return value;
-  return `${parts[0]}\\...\\${parts.slice(-2).join("\\")}`;
-}
-
-function Slider({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return (
-    <label className="review-slider">
-      <span>{label}</span>
-      <input type="range" min={0} max={5} value={value} onChange={(event) => onChange(Number(event.target.value))} />
-      <em>{value}</em>
-    </label>
-  );
+  return parts[0] + "\\...\\" + parts.slice(-2).join("\\");
 }

@@ -1,10 +1,11 @@
-export type OcrMode = "cloud" | "local" | "off";
-export type CloudOcrProvider = "vision-model" | "ocr-api";
 export type ToolboxTool = "rebate" | "video" | "review" | "title" | "compare" | "settings";
 export type RebateViewKey = "import" | "entry" | "preview" | "export";
 export type VideoTemplateId = "bos-template" | "video-slice";
 export type VideoTaskStatus = "draft" | "ready" | "processing" | "done" | "failed";
 export type FontScale = "small" | "normal" | "large";
+export type ReviewWorkspaceMode = "search" | "ai" | "mixed";
+export type ReviewThinkingMode = "off" | "fast" | "balanced" | "deep";
+export type ReviewThinkingEffort = "minimal" | "low" | "medium" | "high";
 
 export interface ApiProfile {
   id: string;
@@ -24,11 +25,6 @@ export interface AppSettings {
   visionModel: string;
   aiEnabled: boolean;
   enhancedCloudValidation: boolean;
-  ocrMode: OcrMode;
-  cloudOcrProvider: CloudOcrProvider;
-  ocrApiBaseUrl: string;
-  ocrApiKey: string;
-  ocrApiModel: string;
   autoListenClipboard: boolean;
   autoAdvance: boolean;
   confirmLowConfidence: boolean;
@@ -59,10 +55,21 @@ export interface AppSettings {
   titleKeywordExcelPath: string;
   sliceMusicPresetId: string;
   sliceCustomMusicPath: string;
+  reviewApiProfileId: string;
+  reviewCustomPrompt: string;
+  reviewSavedCopies?: string[];
+  reviewWorkspaceMode: ReviewWorkspaceMode;
+  reviewScoringEnabled: boolean;
+  reviewTargetLength: number;
+  reviewThinkingMode: ReviewThinkingMode;
+  reviewThinkingEffort: ReviewThinkingEffort;
+  titleAiSelectionEnabled: boolean;
+  titleExtraKeywords: string;
   compareAutoOpenReminderDialog: boolean;
   compareShowPassedRowsAfterVerify: boolean;
   fontScale: FontScale;
   lastSeenChangelogVersion?: string;
+  everythingEsPath: string;
 }
 
 export interface VideoCandidate {
@@ -116,7 +123,6 @@ export interface FfmpegStatus {
   path: string;
   detail: string;
   acceleration?: string;
-  gpuNames?: string[];
 }
 
 export interface VideoRenderPayload {
@@ -152,6 +158,9 @@ export interface ReviewGenerationOptions {
   query: string;
   selectedPaths: string[];
   productDescription: string;
+  targetLength: number;
+  thinkingMode: ReviewThinkingMode;
+  thinkingEffort: ReviewThinkingEffort;
   emojiLevel: number;
   professionalLevel: number;
   buyerLevel: number;
@@ -233,7 +242,32 @@ export interface TitleKeywordHit {
   category: string;
   source: TitleKeywordSource;
   weight: number;
+  compositeValue: number;
   matchType: "exact" | "ordered" | "partial";
+  rank?: number;
+}
+
+export interface SubstringHit {
+  keyword: string;
+  category: string;
+  source: TitleKeywordSource;
+  start: number;
+  length: number;
+  value: number;
+  rank?: number;
+}
+
+export interface TitleRecommendation {
+  type: "insert" | "reorder" | "missing-element" | "unhit-keyword" | "byte-tip" | "blue-ocean" | "root-hint" | "duplicate";
+  message: string;
+  detail: string;
+  estimatedGain: number;
+}
+
+export interface TitleScoreBreakdown {
+  keywordScore: number;
+  byteScore: number;
+  blueOceanScore: number;
 }
 
 export interface TitleCandidate {
@@ -248,6 +282,8 @@ export interface TitleCandidate {
   tokens: string[];
   ruleChecks: TitleRuleCheck[];
   keywordHits: TitleKeywordHit[];
+  substringHits: SubstringHit[];
+  recommendations: TitleRecommendation[];
   suggestions: string[];
 }
 
@@ -279,9 +315,12 @@ export interface TitleAnalysisResult {
   bodyBytes: number;
   totalBytes: number;
   score: number;
+  scoreBreakdown?: TitleScoreBreakdown;
   grade: "excellent" | "good" | "needs-work" | "blocked";
   candidate: TitleCandidate | null;
-  recommendations: string[];
+  recommendations: TitleRecommendation[];
+  substringHits: SubstringHit[];
+  suggestedTitles: TitleCandidate[];
   endingAdvice?: string;
   warnings: string[];
   diagnostics?: TitleGenerationDiagnostics;
@@ -320,7 +359,7 @@ export interface RecognitionResult {
   name: string;
   confidence: number;
   reason: string;
-  source: "rules" | "text-model" | "vision-model" | "local-ocr" | "manual";
+  source: "rules" | "text-model" | "vision-model" | "manual";
   rawText?: string;
 }
 
@@ -349,11 +388,6 @@ export interface ExportPayload {
 export interface ExportResult {
   canceled: boolean;
   filePath?: string;
-}
-
-export interface LocalOcrStatus {
-  state: "not-installed" | "installing" | "ready" | "error";
-  detail: string;
 }
 
 export interface ModelConnectionStatus {
@@ -389,11 +423,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   visionModel: DEFAULT_API_PROFILE.visionModel,
   aiEnabled: true,
   enhancedCloudValidation: false,
-  ocrMode: "cloud",
-  cloudOcrProvider: "vision-model",
-  ocrApiBaseUrl: "",
-  ocrApiKey: "",
-  ocrApiModel: "",
   autoListenClipboard: true,
   autoAdvance: true,
   confirmLowConfidence: true,
@@ -424,10 +453,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
   titleKeywordExcelPath: DEFAULT_TITLE_KEYWORD_EXCEL_PATH,
   sliceMusicPresetId: "",
   sliceCustomMusicPath: "",
+  reviewApiProfileId: "",
+  reviewCustomPrompt: "",
+  reviewSavedCopies: [],
+  reviewWorkspaceMode: "mixed",
+  reviewScoringEnabled: true,
+  reviewTargetLength: 80,
+  reviewThinkingMode: "balanced",
+  reviewThinkingEffort: "medium",
+  titleAiSelectionEnabled: true,
+  titleExtraKeywords: "",
   compareAutoOpenReminderDialog: true,
   compareShowPassedRowsAfterVerify: true,
   fontScale: "normal",
-  lastSeenChangelogVersion: ""
+  lastSeenChangelogVersion: "",
+  everythingEsPath: ""
 };
 
 export const DEFAULT_WORKBENCH_STATE: WorkbenchState = {
@@ -451,6 +491,14 @@ export const DEFAULT_FIXED_TAIL_ROW = {
 
 export function getActiveApiProfile(settings: AppSettings): ApiProfile {
   return settings.apiProfiles.find((profile) => profile.id === settings.activeApiProfileId) ?? settings.apiProfiles[0] ?? DEFAULT_API_PROFILE;
+}
+
+export function getReviewApiProfile(settings: AppSettings): ApiProfile {
+  if (settings.reviewApiProfileId) {
+    const found = settings.apiProfiles.find((profile) => profile.id === settings.reviewApiProfileId);
+    if (found) return found;
+  }
+  return getActiveApiProfile(settings);
 }
 
 export function normalizeSettings(value: Partial<AppSettings> | null | undefined): AppSettings {
@@ -513,10 +561,21 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     titleKeywordExcelPath: String(raw.titleKeywordExcelPath ?? DEFAULT_SETTINGS.titleKeywordExcelPath),
     sliceMusicPresetId: String(raw.sliceMusicPresetId ?? ""),
     sliceCustomMusicPath: String(raw.sliceCustomMusicPath ?? ""),
+    reviewApiProfileId: String(raw.reviewApiProfileId ?? ""),
+    reviewCustomPrompt: String(raw.reviewCustomPrompt ?? ""),
+    reviewSavedCopies: Array.isArray(raw.reviewSavedCopies) ? raw.reviewSavedCopies.filter((x: unknown) => typeof x === "string").slice(0, 200) : [],
+    reviewWorkspaceMode: normalizeReviewWorkspaceMode(raw.reviewWorkspaceMode),
+    reviewScoringEnabled: Boolean(raw.reviewScoringEnabled ?? DEFAULT_SETTINGS.reviewScoringEnabled),
+    reviewTargetLength: clampNumber(raw.reviewTargetLength, 30, 300, DEFAULT_SETTINGS.reviewTargetLength),
+    reviewThinkingMode: normalizeReviewThinkingMode(raw.reviewThinkingMode),
+    reviewThinkingEffort: normalizeReviewThinkingEffort(raw.reviewThinkingEffort),
+    titleAiSelectionEnabled: Boolean(raw.titleAiSelectionEnabled ?? DEFAULT_SETTINGS.titleAiSelectionEnabled),
+    titleExtraKeywords: String(raw.titleExtraKeywords ?? ""),
     compareAutoOpenReminderDialog: Boolean(raw.compareAutoOpenReminderDialog ?? DEFAULT_SETTINGS.compareAutoOpenReminderDialog),
     compareShowPassedRowsAfterVerify: Boolean(raw.compareShowPassedRowsAfterVerify ?? DEFAULT_SETTINGS.compareShowPassedRowsAfterVerify),
     fontScale: normalizeFontScale(raw.fontScale),
-    lastSeenChangelogVersion: String(raw.lastSeenChangelogVersion ?? "")
+    lastSeenChangelogVersion: String(raw.lastSeenChangelogVersion ?? ""),
+    everythingEsPath: String(raw.everythingEsPath ?? "")
   };
 }
 
@@ -545,6 +604,18 @@ export function normalizeVideoTemplate(value: unknown): VideoTemplateId {
 
 function normalizeFontScale(value: unknown): FontScale {
   return value === "small" || value === "large" ? value : "normal";
+}
+
+function normalizeReviewWorkspaceMode(value: unknown): ReviewWorkspaceMode {
+  return value === "search" || value === "ai" || value === "mixed" ? value : "mixed";
+}
+
+function normalizeReviewThinkingMode(value: unknown): ReviewThinkingMode {
+  return value === "off" || value === "fast" || value === "deep" ? value : "balanced";
+}
+
+function normalizeReviewThinkingEffort(value: unknown): ReviewThinkingEffort {
+  return value === "minimal" || value === "low" || value === "high" ? value : "medium";
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {

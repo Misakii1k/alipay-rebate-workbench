@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, FileAudio, FolderOpen, ImagePlus, Loader2, List, Play, Plus, Search, Scissors, Stethoscope, Table2, Video, X } from "lucide-react";
+import { Check, FileAudio, FolderOpen, ImagePlus, Loader2, List, Play, Plus, Search, Scissors, Stethoscope, Table2, Trash2, Video, X } from "lucide-react";
 import clsx from "clsx";
 import type { AppSettings, FfmpegStatus, VideoCandidate, VideoRenderProgress, VideoTask, VideoTemplateId } from "./lib/shared";
 import { autoFillSliceImages, createVideoTask, isTaskReady, normalizeVideoTask, updateTaskName } from "./lib/video";
@@ -31,7 +31,9 @@ export function VideoWorkbench({
   const [candidateView, setCandidateView] = useState<"thumb" | "list">("thumb");
   const [processing, setProcessing] = useState(false);
   const [batchInfo, setBatchInfo] = useState("");
+  const [activeSlot, setActiveSlot] = useState(0);
   const [diagnosing, setDiagnosing] = useState(false);
+  const [fixing, setFixing] = useState(false);
   const [diagnosis, setDiagnosis] = useState<{ items: Array<{ label: string; passed: boolean; detail: string }>; suggestions: string[]; ok: boolean } | null>(null);
   const currentTask = tasks[currentIndex] ?? tasks[0];
   const readyCount = useMemo(() => tasks.filter(isTaskReady).length, [tasks]);
@@ -88,20 +90,54 @@ export function VideoWorkbench({
     await onSaveSettings({ ...settings, [kind === "library" ? "videoLibraryDir" : "videoOutputDir"]: result.paths[0] });
   }
 
-  function applyImagePaths(paths: string[]) {
+  function applyImagePaths(paths: string[], targetSlot?: number) {
     const images = paths.filter((filePath) => /\.(jpe?g|png|webp|bmp)$/i.test(filePath));
     if (!images.length) return;
     const namePatch = currentTask.outputName ? {} : updateTaskName(currentTask, baseName(images[0]));
     if (currentTask.template === "video-slice") {
-      updateCurrent({ ...namePatch, imagePaths: autoFillSliceImages(images), imagePath: images[0] ?? "" });
+      if (images.length === 1 && targetSlot !== undefined) {
+        const newPaths = [...(currentTask.imagePaths.length === 5 ? currentTask.imagePaths : Array<string>(5).fill(""))];
+        newPaths[targetSlot] = images[0];
+        updateCurrent({ ...namePatch, imagePaths: newPaths, imagePath: newPaths.find(Boolean) ?? "" });
+        const nextEmpty = newPaths.findIndex((p, i) => i > targetSlot && !p);
+        const fallback = newPaths.findIndex((p) => !p);
+        setActiveSlot(nextEmpty !== -1 ? nextEmpty : fallback !== -1 ? fallback : targetSlot);
+      } else {
+        const filled = autoFillSliceImages(images);
+        updateCurrent({ ...namePatch, imagePaths: filled, imagePath: images[0] ?? "" });
+        const nextEmpty = filled.findIndex((p) => !p);
+        setActiveSlot(nextEmpty !== -1 ? nextEmpty : 0);
+      }
+    } else if (images.length > 1) {
+      const newTasks = images.map((imgPath) => {
+        const task = createVideoTask(currentTask.template);
+        const patch = updateTaskName(task, baseName(imgPath));
+        return { ...task, ...patch, imagePath: imgPath, imagePaths: [imgPath] };
+      });
+      setTasks((prev) => [...prev, ...newTasks]);
+      setCurrentIndex(tasks.length);
+      showToast(`已为 ${newTasks.length} 张图片创建独立任务，请分别选择视频。`);
     } else {
       updateCurrent({ ...namePatch, imagePath: images[0], imagePaths: [images[0]] });
     }
   }
 
+  function removeSliceImage(slot: number) {
+    const newPaths = [...(currentTask.imagePaths.length === 5 ? currentTask.imagePaths : Array<string>(5).fill(""))];
+    newPaths[slot] = "";
+    updateCurrent({ imagePaths: newPaths, imagePath: newPaths.find(Boolean) ?? "" });
+    setActiveSlot(slot);
+  }
+
+  async function chooseSlotImage(slot: number) {
+    const result = await window.alipayWorkbench.selectFiles({ kind: "image", multi: false });
+    if (!result.canceled && result.paths[0]) applyImagePaths([result.paths[0]], slot);
+  }
+
   async function chooseImages() {
-    const result = await window.alipayWorkbench.selectFiles({ kind: "image", multi: currentTask.template === "video-slice" });
-    if (!result.canceled) applyImagePaths(result.paths);
+    const result = await window.alipayWorkbench.selectFiles({ kind: "image", multi: true });
+    if (result.canceled || !result.paths.length) return;
+    applyImagePaths(result.paths);
   }
 
   async function chooseLatestImage() {
@@ -149,6 +185,25 @@ export function VideoWorkbench({
       showToast(error instanceof Error ? error.message : "诊断失败");
     } finally {
       setDiagnosing(false);
+    }
+  }
+
+  async function runAutoFix() {
+    setFixing(true);
+    try {
+      const result = await window.alipayWorkbench.autoFixFfmpeg(settings);
+      if (result.settingsPatch) {
+        await onSaveSettings({ ...settings, ...result.settingsPatch });
+      }
+      const msgs: string[] = [];
+      if (result.fixed.length) msgs.push("已修复: " + result.fixed.join("、"));
+      if (result.failed.length) msgs.push("未能修复: " + result.failed.join("、"));
+      showToast(msgs.join(" | ") || "未发现可修复项");
+      await runDiagnosis();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "自动修复失败");
+    } finally {
+      setFixing(false);
     }
   }
 
@@ -231,6 +286,23 @@ export function VideoWorkbench({
     showToast(`批量制作结束：成功 ${done}，失败 ${failed}`);
   }
 
+  function removeTask(index: number) {
+    setTasks((prev) => {
+      if (prev.length <= 1) return [createVideoTask(currentTask.template)];
+      return prev.filter((_, i) => i !== index);
+    });
+    setCurrentIndex((prev) => {
+      if (tasks.length <= 1) return 0;
+      if (prev >= index && prev > 0) return prev - 1;
+      return prev;
+    });
+  }
+
+  function clearAllTasks() {
+    setTasks([createVideoTask(currentTask.template)]);
+    setCurrentIndex(0);
+  }
+
   function addTask(template: VideoTemplateId = currentTask.template) {
     setTasks((prev) => [...prev, createVideoTask(template)]);
     setCurrentIndex(tasks.length);
@@ -238,8 +310,8 @@ export function VideoWorkbench({
 
   return (
     <section className="video-workbench">
-      <div className="tool-header">
-        <div>
+      <div className="tool-header video-status-header">
+        <div className="video-internal-title" aria-hidden="true">
           <p className="eyebrow">视频批量剪辑</p>
           <h1>视频批量剪辑</h1>
         </div>
@@ -251,7 +323,6 @@ export function VideoWorkbench({
       <div className="video-settings-strip" data-tour="video-paths">
         <PathBadge label="视频库" value={settings.videoLibraryDir} onPick={() => chooseDirectory("library")} />
         <PathBadge label="输出目录" value={settings.videoOutputDir} onPick={() => chooseDirectory("output")} />
-        <button className="secondary-action light" onClick={chooseFfmpeg}>指定 FFmpeg</button>
         <button className="secondary-action light" onClick={runDiagnosis} disabled={diagnosing}>
           {diagnosing ? <Loader2 className="spin" size={16} /> : <Stethoscope size={16} />} 诊断修复
         </button>
@@ -264,8 +335,21 @@ export function VideoWorkbench({
       </div>
 
       <div className={clsx("video-layout", currentTask.template === "video-slice" && "slice-mode")} data-tour="video-assets">
-        <UploadBox title={currentTask.template === "video-slice" ? "上传 5 张图片" : "上传图片"} icon="image" onClick={chooseImages} onDropFiles={applyImagePaths}>
-          {currentTask.template === "video-slice" ? <SliceImageGrid task={currentTask} /> : <FilePreview path={currentTask.imagePath} />}
+        <UploadBox
+          title={currentTask.template === "video-slice" ? "上传 5 张图片" : "上传图片"}
+          icon="image"
+          onClick={currentTask.template === "video-slice" ? () => chooseSlotImage(activeSlot) : chooseImages}
+          onDropFiles={currentTask.template === "video-slice" ? (paths) => applyImagePaths(paths, activeSlot) : applyImagePaths}
+        >
+          {currentTask.template === "video-slice" ? (
+            <SliceImageGrid
+              task={currentTask}
+              activeSlot={activeSlot}
+              onSlotClick={(slot) => { setActiveSlot(slot); void chooseSlotImage(slot); }}
+              onSlotDrop={(slot, paths) => applyImagePaths(paths, slot)}
+              onSlotRemove={removeSliceImage}
+            />
+          ) : <FilePreview path={currentTask.imagePath} />}
           <button type="button" className="inline-mini" onClick={(event) => { event.stopPropagation(); void chooseLatestImage(); }}>选择最新图片</button>
         </UploadBox>
 
@@ -281,7 +365,7 @@ export function VideoWorkbench({
           {currentTask.template === "video-slice" && (
             <MusicPicker task={currentTask} settings={settings} onPreset={(id) => updateCurrent({ musicPresetId: id, musicPath: "" })} onCustom={chooseMusic} />
           )}
-          <TaskQueue tasks={tasks} currentIndex={currentIndex} onPick={setCurrentIndex} />
+          <TaskQueue tasks={tasks} currentIndex={currentIndex} onPick={setCurrentIndex} onRemove={removeTask} />
         </div>
 
         {currentTask.template !== "video-slice" && (
@@ -311,10 +395,18 @@ export function VideoWorkbench({
         <button className="secondary-action" onClick={renderAllReady} disabled={processing || !ffmpegStatus.available}>
           <Check size={17} /> 批量制作全部
         </button>
+        <button className="secondary-action light danger-ghost" onClick={clearAllTasks} disabled={processing}>
+          <Trash2 size={17} /> 清空记录
+        </button>
         <span className="queue-summary">任务 {currentIndex + 1} / {tasks.length}，可制作 {readyCount} 条</span>
       </div>
 
-      {currentTask.error && <div className="error-banner">{currentTask.error}</div>}
+      {currentTask.error && (
+        <div className="error-banner">
+          <span>{currentTask.error}</span>
+          {currentTask.log && <details><summary>查看完整日志</summary><pre className="error-log-detail">{currentTask.log}</pre></details>}
+        </div>
+      )}
       {diagnosis && (
         <div className="diagnosis-panel">
           <strong>FFmpeg 诊断结果</strong>
@@ -330,7 +422,14 @@ export function VideoWorkbench({
           <div className="diagnosis-suggestions">
             {diagnosis.suggestions.map((s, i) => <p key={i}>{s}</p>)}
           </div>
-          <button className="secondary-action light compact" onClick={() => setDiagnosis(null)}>关闭诊断</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {!diagnosis.ok && (
+              <button className="secondary-action compact" onClick={runAutoFix} disabled={fixing}>
+                {fixing ? <><Loader2 className="spin" size={14} /> 修复中…</> : "尝试自动修复"}
+              </button>
+            )}
+            <button className="secondary-action light compact" onClick={() => setDiagnosis(null)}>关闭诊断</button>
+          </div>
         </div>
       )}
       {currentTask.outputPath && <div className="result-box"><strong>输出文件</strong><span>{currentTask.outputPath}</span></div>}
@@ -408,12 +507,39 @@ function FilePreview({ path }: { path: string }) {
   return <em className="file-preview">{path ? path.split(/[\\/]/).pop() : "尚未选择"}</em>;
 }
 
-function SliceImageGrid({ task }: { task: VideoTask }) {
+function SliceImageGrid({ task, activeSlot, onSlotClick, onSlotDrop, onSlotRemove }: {
+  task: VideoTask;
+  activeSlot: number;
+  onSlotClick: (slot: number) => void;
+  onSlotDrop: (slot: number, paths: string[]) => void;
+  onSlotRemove: (slot: number) => void;
+}) {
   return (
     <div className="slice-grid">
-      {Array.from({ length: 5 }).map((_, index) => (
-        <i key={index} className={clsx(task.imagePaths[index] && "filled")}>{index + 1}</i>
-      ))}
+      {Array.from({ length: 5 }).map((_, index) => {
+        const filled = Boolean(task.imagePaths[index]);
+        return (
+          <div
+            key={index}
+            className={clsx("slice-slot", filled && "filled", index === activeSlot && "active")}
+            onClick={() => onSlotClick(index)}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const paths = Array.from(e.dataTransfer.files).map((f) => window.alipayWorkbench.getPathForFile(f)).filter(Boolean);
+              onSlotDrop(index, paths);
+            }}
+          >
+            <span>{index + 1}</span>
+            {filled && (
+              <button className="slice-slot-delete" onClick={(e) => { e.stopPropagation(); onSlotRemove(index); }}>
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -434,13 +560,16 @@ function MusicPicker({ task, settings, onPreset, onCustom }: { task: VideoTask; 
   );
 }
 
-function TaskQueue({ tasks, currentIndex, onPick }: { tasks: VideoTask[]; currentIndex: number; onPick: (index: number) => void }) {
+function TaskQueue({ tasks, currentIndex, onPick, onRemove }: { tasks: VideoTask[]; currentIndex: number; onPick: (index: number) => void; onRemove: (index: number) => void }) {
   return (
     <div className="task-queue">
       {tasks.map((task, index) => (
-        <button key={task.id} className={clsx(index === currentIndex && "active", task.status)} onClick={() => onPick(index)}>
-          {index + 1}. {task.outputName || "未命名"} <span>{task.progress ? `${task.progress}%` : ""}</span>
-        </button>
+        <div key={task.id} className={clsx("task-queue-item", index === currentIndex && "active", task.status)}>
+          <button className="task-queue-label" onClick={() => onPick(index)}>
+            {index + 1}. {task.outputName || "未命名"} <span>{task.progress ? `${task.progress}%` : ""}</span>
+          </button>
+          <button className="task-queue-delete" onClick={() => onRemove(index)}><Trash2 size={13} /></button>
+        </div>
       ))}
     </div>
   );

@@ -1,8 +1,8 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import ExcelJS from "exceljs";
@@ -17,7 +17,6 @@ import {
   ExportPayload,
   ExportResult,
   FfmpegStatus,
-  LocalOcrStatus,
   ReviewGenerationOptions,
   ReviewGenerationResult,
   ReviewSearchResult,
@@ -36,13 +35,13 @@ import {
   VideoWorkbenchState,
   WorkbenchState,
   getActiveApiProfile,
+  getReviewApiProfile,
   normalizeSettings
 } from "../src/lib/shared";
-import { analyzeTitleScore, containsThirdPartyBrand, generateTitleScore, sanitizeTitleKeyword } from "../src/lib/titleOptimizer";
+import { analyzeTitleScore, containsThirdPartyBrand, generateTitleScore, previewTokenPool, sanitizeTitleKeyword } from "../src/lib/titleOptimizer";
 
 let mainWindow: BrowserWindow | null = null;
-let ocrStatus: LocalOcrStatus = { state: "not-installed", detail: "本地 OCR 尚未安装" };
-let accelerationCache: VideoAcceleration | null = null;
+let cpuThreads = Math.max(1, os.cpus().length);
 let updateStatus: UpdateStatus = { state: "idle", detail: "尚未检查更新" };
 let updaterListenersConfigured = false;
 let titleKeywordCache: { filePath: string; mtimeMs: number; data: TitleKeywordData } | null = null;
@@ -53,10 +52,8 @@ const videoExts = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm"]);
 const audioExts = new Set([".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"]);
 
 interface VideoAcceleration {
-  encoder: "h264_nvenc" | "h264_amf" | "h264_qsv" | "libx264";
+  encoder: "libx264";
   label: string;
-  gpuNames: string[];
-  dedicated: boolean;
 }
 
 function userDataPath(...segments: string[]) {
@@ -181,13 +178,11 @@ async function getFfmpegStatus(settings: AppSettings): Promise<FfmpegStatus> {
     child.stdout.on("data", (chunk) => (output += String(chunk)));
     child.on("error", (error) => resolve({ available: false, path: ffmpegPath, detail: error.message }));
     child.on("exit", async (code) => {
-      const acceleration = code === 0 ? await detectVideoAcceleration(ffmpegPath) : null;
       resolve({
         available: code === 0,
         path: ffmpegPath,
         detail: code === 0 ? output.split(/\r?\n/)[0] || "FFmpeg 可用" : "FFmpeg 无法执行",
-        acceleration: acceleration?.label,
-        gpuNames: acceleration?.gpuNames
+        acceleration: code === 0 ? `CPU 多线程：${cpuThreads} 线程` : undefined
       });
     });
   });
@@ -280,12 +275,42 @@ async function loadTitleKeywordData(settings: AppSettings): Promise<TitleKeyword
 
 async function generateTitleCandidates(settings: AppSettings, payload: TitleGeneratePayload) {
   const data = await loadTitleKeywordData(settings);
-  return generateTitleScore(data, payload.productName, payload.categoryName, payload.variantCount);
+  const extra = await collectTitleExtraKeywords(settings, data, payload.productName, payload.categoryName);
+  return generateTitleScore(data, payload.productName, payload.categoryName, payload.variantCount, extra);
 }
 
 async function analyzeTitle(settings: AppSettings, payload: TitleAnalyzePayload) {
   const data = await loadTitleKeywordData(settings);
-  return analyzeTitleScore(data, payload);
+  const extra = await collectTitleExtraKeywords(settings, data, payload.productName, payload.categoryName);
+  return analyzeTitleScore(data, payload, extra);
+}
+
+async function collectTitleExtraKeywords(settings: AppSettings, data: import("../src/lib/shared").TitleKeywordData, productName: string, categoryName?: string): Promise<string[]> {
+  const normalized = normalizeSettings(settings);
+  const extras: string[] = [];
+  const manualRaw = (normalized.titleExtraKeywords || "").trim();
+  if (manualRaw) {
+    extras.push(...manualRaw.split(/[\s,，、;；]+/).map((w) => w.trim()).filter(Boolean));
+  }
+  if (!normalized.titleAiSelectionEnabled) return extras;
+  if (!productName.trim()) return extras;
+  try {
+    const pool = previewTokenPool(data, productName, categoryName);
+    if (pool.length === 0) return extras;
+    const enhanced = await Promise.race([
+      enhanceTitlePoolWithLLM(normalized, { productName, categoryName, pool }),
+      new Promise<{ ok: false; selected: string[]; suggested: string[]; reason: string }>((resolve) =>
+        setTimeout(() => resolve({ ok: false, selected: [], suggested: [], reason: "LLM 超时" }), 8000)
+      )
+    ]);
+    if (enhanced.ok) {
+      extras.push(...enhanced.selected, ...enhanced.suggested);
+      appendLog("info", "AI 选词成功", { selected: enhanced.selected.length, suggested: enhanced.suggested.length });
+    }
+  } catch (error) {
+    appendLog("warn", "AI 选词调用异常，降级为纯算法", { message: (error as Error).message });
+  }
+  return extras;
 }
 
 function parseRankedKeywordSheet(
@@ -332,6 +357,8 @@ function parseBlueOceanSheet(worksheet: ExcelJS.Worksheet, categoryMap: Map<stri
     const demandCol = findColumnByHeader(headers, ["需求供给比"]);
     const tmallCol = findColumnByHeader(headers, ["天猫商品点击占比"]);
     const popularityCol = findColumnByHeader(headers, ["搜索人气"]);
+    const conversionCol = findColumnByHeader(headers, ["支付转化率"]);
+    const clickRateCol = findColumnByHeader(headers, ["点击率"]);
     let count = 0;
     for (let rowIndex = 3; rowIndex <= worksheet.rowCount; rowIndex += 1) {
       const keyword = cleanKeywordCell(cellText(worksheet, rowIndex, keywordCol));
@@ -339,14 +366,16 @@ function parseBlueOceanSheet(worksheet: ExcelJS.Worksheet, categoryMap: Map<stri
       const demand = demandCol ? parseNumberCell(worksheet.getRow(rowIndex).getCell(demandCol).value) : 0;
       const tmall = tmallCol ? parseNumberCell(worksheet.getRow(rowIndex).getCell(tmallCol).value) : 0;
       const popularity = popularityCol ? parseRangeNumber(cellText(worksheet, rowIndex, popularityCol)) : 0;
-      const blueOceanScore = calcBlueOceanWeight(demand, tmall, popularity, rowIndex);
+      const conversionRate = conversionCol ? parseRangePercent(cellText(worksheet, rowIndex, conversionCol)) : 0;
+      const clickRate = clickRateCol ? parseNumberCell(worksheet.getRow(rowIndex).getCell(clickRateCol).value) : 0;
+      const blueOceanScore = calcBlueOceanWeight(demand, tmall, popularity, conversionRate, rowIndex);
       addTitleKeyword(categoryMap, {
         keyword,
         category: categoryName,
         source: "blue-ocean",
         weight: blueOceanScore,
         blueOceanScore,
-        metrics: { demandSupplyRatio: demand, tmallClickShare: tmall, popularity }
+        metrics: { demandSupplyRatio: demand, tmallClickShare: tmall, popularity, conversionRate, clickRate }
       });
       count += 1;
     }
@@ -458,12 +487,21 @@ function calcRankWeight(rank: number, rowIndex: number, source: "market" | "brea
   return Math.max(18, Math.round(base - Math.log10(fallbackRank + 1) * 28));
 }
 
-function calcBlueOceanWeight(demand: number, tmall: number, popularity: number, rowIndex: number) {
+function calcBlueOceanWeight(demand: number, tmall: number, popularity: number, conversionRate: number, rowIndex: number) {
   const demandScore = Math.min(70, Math.log10(Math.max(1, demand)) * 24);
   const competitionScore = tmall > 0 ? Math.max(0, 35 - tmall * 35) : 16;
   const popularityScore = Math.min(25, Math.log10(Math.max(1, popularity)) * 5);
+  const conversionScore = Math.min(30, conversionRate * 1.5);
   const rankScore = Math.max(0, 22 - rowIndex / 10);
-  return Math.round(70 + demandScore + competitionScore + popularityScore + rankScore);
+  return Math.round(70 + demandScore + competitionScore + popularityScore + conversionScore + rankScore);
+}
+
+function parseRangePercent(value: string): number {
+  const match = value.match(/(\d+(?:\.\d+)?)%\s*~\s*(\d+(?:\.\d+)?)%/);
+  if (match) return (Number(match[1]) + Number(match[2])) / 2;
+  const single = value.match(/(\d+(?:\.\d+)?)%/);
+  if (single) return Number(single[1]);
+  return 0;
 }
 
 async function walkMedia(root: string, allowed: Set<string>, maxItems = 5000): Promise<string[]> {
@@ -516,7 +554,15 @@ async function walkMediaAndFolders(root: string, allowed: Set<string>, maxItems 
 async function scanVideoLibrary(settings: AppSettings, productName: string, colorName: string): Promise<VideoCandidate[]> {
   const root = settings.videoLibraryDir;
   if (!root || !existsSync(root)) throw new Error("请先在设置中选择视频库文件夹。");
-  const files = await walkMedia(root, new Set([...videoExts, ...imageExts]), 8000);
+  const allExts = new Set([...videoExts, ...imageExts]);
+  const esPath = resolveEverythingEsPath(settings);
+  let files: string[];
+  if (esPath) {
+    const esResults = await searchWithEverything(esPath, root, `${productName} ${colorName}`.trim(), allExts, 2000);
+    files = esResults.length > 0 ? esResults : await walkMedia(root, allExts, 8000);
+  } else {
+    files = await walkMedia(root, allExts, 8000);
+  }
   const terms = buildMatchTerms(`${productName} ${colorName}`);
   return files
     .map((filePath) => scoreMediaCandidate(root, filePath, terms))
@@ -608,22 +654,41 @@ function imageToDataUrl(filePath: string, maxSide = 720) {
   return resized.toDataURL();
 }
 
+async function validateVideoInput(ffmpegPath: string, videoPath: string): Promise<{ hasVideo: boolean; hasAudio: boolean; detail: string }> {
+  const result = await runProcess(ffmpegPath, ["-hide_banner", "-i", videoPath]);
+  const hasVideo = /Stream\s+#\d+:\d+.*Video/i.test(result.output);
+  const hasAudio = /Stream\s+#\d+:\d+.*Audio/i.test(result.output);
+  return { hasVideo, hasAudio, detail: result.output };
+}
+
 async function renderVideoTask(payload: VideoRenderPayload): Promise<VideoRenderResult> {
   const settings = normalizeSettings(payload.settings);
   const ffmpegPath = resolveFfmpegPath(settings);
   if (!ffmpegPath) throw new Error("未找到 FFmpeg，请在设置中指定 ffmpeg.exe 或放入程序 bin 目录。");
   if (!settings.videoOutputDir) throw new Error("请先选择输出文件夹。");
   await fs.mkdir(settings.videoOutputDir, { recursive: true });
+
+  if (payload.task.template !== "video-slice") {
+    const image = payload.task.imagePath || payload.task.imagePaths[0];
+    if (!image || !existsSync(image)) throw new Error(`图片文件不存在：${image || "未选择"}`);
+    if (!payload.task.videoPath || !existsSync(payload.task.videoPath)) throw new Error(`视频文件不存在：${payload.task.videoPath || "未选择"}`);
+    const probe = await validateVideoInput(ffmpegPath, payload.task.videoPath);
+    if (!probe.hasVideo) throw new Error("视频文件没有可解码的视频流，请检查文件是否损坏或格式不支持。");
+  } else {
+    const missing = payload.task.imagePaths.filter(Boolean).filter((p) => !existsSync(p));
+    if (missing.length) throw new Error(`以下图片文件不存在：${missing.map((p) => path.basename(p)).join("、")}`);
+  }
+
   const outputPath = await uniqueOutputPath(settings.videoOutputDir, payload.task.outputName || `${payload.task.productName}-${payload.task.colorName}`);
-  const acceleration = await detectVideoAcceleration(ffmpegPath);
+  const acceleration = cpuAcceleration();
   const duration = await estimateTaskDuration(ffmpegPath, payload.task);
   emitVideoProgress(payload.task.id, 8, "准备素材");
-  const result =
-    payload.task.template === "video-slice"
-      ? await renderWithFallback(ffmpegPath, acceleration, (active) => buildVideoSliceArgs(payload, outputPath, active), payload.task.id, duration)
-      : await renderBosTemplate(ffmpegPath, payload, outputPath, acceleration, duration);
+  const args = await (payload.task.template === "video-slice"
+    ? buildVideoSliceArgs(payload, outputPath)
+    : buildBosTemplateArgs(ffmpegPath, payload, outputPath));
+  const result = await runFfmpeg(ffmpegPath, args, payload.task.id, `剪辑中（${acceleration.label}）`, duration);
   emitVideoProgress(payload.task.id, result.success ? 100 : 0, result.success ? "完成" : "失败");
-  await appendLog(result.success ? "info" : "error", "视频剪辑任务完成", { outputPath, success: result.success, error: result.error, acceleration: acceleration.label });
+  await appendLog(result.success ? "info" : "error", "视频剪辑任务完成", { outputPath, success: result.success, error: result.error });
   return { ...result, outputPath };
 }
 
@@ -638,63 +703,65 @@ async function uniqueOutputPath(dir: string, baseName: string) {
   return candidate;
 }
 
-async function renderBosTemplate(ffmpegPath: string, payload: VideoRenderPayload, outputPath: string, acceleration: VideoAcceleration, duration?: number): Promise<VideoRenderResult> {
+async function buildBosTemplateArgs(ffmpegPath: string, payload: VideoRenderPayload, outputPath: string): Promise<string[]> {
   const image = payload.task.imagePath || payload.task.imagePaths[0];
   if (!image || !payload.task.videoPath) throw new Error("帛先生模板需要 1 张图片和 1 个视频。");
   const { width, height } = await probeImageSize(image);
-  const args = [
+  const w = width;
+  const h = height;
+  const probe = await validateVideoInput(ffmpegPath, payload.task.videoPath);
+  return [
     "-y",
     "-hide_banner",
     "-loop",
     "1",
     "-t",
-    "0.04",
+    "0.034",
+    "-framerate",
+    "30",
     "-i",
     image,
     "-i",
     payload.task.videoPath,
     "-filter_complex",
-    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:white,fps=30,format=yuv420p[intro];` +
-      `[1:v]split=2[bg][fg];[bg]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2,boxblur=24:2[blur];` +
-      `[fg]scale=${width}:${height}:force_original_aspect_ratio=decrease[fit];[blur][fit]overlay=(W-w)/2:(H-h)/2,format=yuv420p[main];` +
+    `[0:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1,fps=30,format=yuv420p[intro];` +
+      `[1:v]split=2[bg][fg];` +
+      `[bg]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=min(iw\\,${w}):min(ih\\,${h}):(iw-min(iw\\,${w}))/2:(ih-min(ih\\,${h}))/2,boxblur=24:2[blur];` +
+      `[fg]scale=${w}:${h}:force_original_aspect_ratio=decrease,setsar=1[fit];` +
+      `[blur][fit]overlay=(W-w)/2:(H-h)/2,format=yuv420p[main];` +
       `[intro][main]concat=n=2:v=1:a=0[outv]`,
     "-map",
     "[outv]",
-    "-map",
-    "1:a?",
+    ...(probe.hasAudio ? ["-map", "1:a", "-c:a", "aac", "-shortest"] : []),
     "-r",
     "30",
     "-pix_fmt",
     "yuv420p",
-    ...encoderArgs(acceleration),
-    "-c:a",
-    "aac",
-    "-shortest",
+    ...encoderArgs(),
     outputPath
   ];
-  return runFfmpeg(ffmpegPath, args, payload.task.id, "合成视频", duration);
 }
 
-async function buildVideoSliceArgs(payload: VideoRenderPayload, outputPath: string, acceleration: VideoAcceleration) {
+async function buildVideoSliceArgs(payload: VideoRenderPayload, outputPath: string) {
   const images = payload.task.imagePaths.filter(Boolean).slice(0, 5);
   if (images.length < 5) throw new Error("视频切片模板需要 5 张图片。");
   const { width, height } = await probeImageSize(images[0]);
   const fps = 30;
-  const segmentDuration = 1.2;
+  const segmentDuration = 3;
   const musicPath = payload.task.musicPath || resolveMusicPresetPath(payload.task.musicPresetId || payload.settings.sliceMusicPresetId);
   const args = ["-y", "-hide_banner"];
-  images.forEach((image) => args.push("-loop", "1", "-t", String(segmentDuration), "-i", image));
+  images.forEach((image) => args.push("-loop", "1", "-t", String(segmentDuration), "-framerate", String(fps), "-i", image));
   if (musicPath) args.push("-stream_loop", "-1", "-i", musicPath);
   const filters =
     images
       .map((_, index) => {
-        const effect = index === 1 || index === 4 ? bounceFilter(width, height) : swingFilter(width, height, index);
+        const effect = index === 1 || index === 4 ? bounceFilter(width, height, segmentDuration) : swingFilter(width, height, index, segmentDuration);
         return `[${index}:v]${effect},fps=${fps},format=yuv420p[v${index}]`;
       })
       .join(";") + `;${images.map((_, index) => `[v${index}]`).join("")}concat=n=5:v=1:a=0[out]`;
   args.push("-filter_complex", filters, "-map", "[out]");
   if (musicPath) args.push("-map", `${images.length}:a:0`, "-c:a", "aac", "-shortest");
-  args.push("-r", String(fps), "-pix_fmt", "yuv420p", ...encoderArgs(acceleration), outputPath);
+  args.push("-r", String(fps), "-pix_fmt", "yuv420p", ...encoderArgs(), outputPath);
   return args;
 }
 
@@ -706,15 +773,15 @@ function resolveMusicPresetPath(id: string) {
   return existsSync(devCandidate) ? devCandidate : "";
 }
 
-function swingFilter(width: number, height: number, index: number) {
-  const direction = index === 2 ? "-1" : "1";
-  return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:white,rotate='${direction}*0.06*sin(2*PI*t/1.2)':ow=${width}:oh=${height}:c=white`;
+function swingFilter(width: number, height: number, index: number, duration: number) {
+  const direction = index === 2 ? "1" : "-1";
+  return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:white,rotate='${direction}*0.06*cos(2*PI*t/2.2)*exp(-0.35*t)':ow=${width}:oh=${height}:c=white`;
 }
 
-function bounceFilter(width: number, height: number) {
+function bounceFilter(width: number, height: number, duration: number) {
   const padW = Math.round(width * 1.15 / 2) * 2;
   const padH = Math.round(height * 1.15 / 2) * 2;
-  return `scale=${padW}:${padH}:force_original_aspect_ratio=decrease,pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:white,scale='iw*(1+0.10*exp(-4*t)*sin(18*t))':'ih*(1+0.10*exp(-4*t)*sin(18*t))',crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2`;
+  return `scale=${padW}:${padH}:force_original_aspect_ratio=decrease,pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:white,scale='iw*(1+0.10*exp(-1.5*t)*cos(3.5*t))':'ih*(1+0.10*exp(-1.5*t)*cos(3.5*t))':eval=frame,crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2`;
 }
 
 async function probeImageSize(imagePath: string) {
@@ -728,57 +795,17 @@ async function probeImageSize(imagePath: string) {
   return { width, height };
 }
 
-async function renderWithFallback(
-  ffmpegPath: string,
-  acceleration: VideoAcceleration,
-  build: (acceleration: VideoAcceleration) => Promise<string[] | VideoRenderResult>,
-  taskId: string,
-  duration?: number
-): Promise<VideoRenderResult> {
-  const primary = await build(acceleration);
-  const primaryResult = Array.isArray(primary) ? await runFfmpeg(ffmpegPath, primary, taskId, "剪辑中", duration) : primary;
-  if (primaryResult.success || acceleration.encoder === "libx264") return primaryResult;
-  const cpu = cpuAcceleration();
-  const fallback = await build(cpu);
-  const fallbackResult = Array.isArray(fallback) ? await runFfmpeg(ffmpegPath, fallback, taskId, "CPU 重试", duration) : fallback;
-  return {
-    ...fallbackResult,
-    log: `${primaryResult.log}\n硬件加速失败，已回退 CPU：${primaryResult.error ?? ""}\n${fallbackResult.log}`,
-    error: fallbackResult.error
-  };
+function cpuAcceleration(): VideoAcceleration {
+  return { encoder: "libx264", label: `CPU 多线程：${cpuThreads} 线程` };
 }
 
-async function detectVideoAcceleration(ffmpegPath: string): Promise<VideoAcceleration> {
-  if (accelerationCache) return accelerationCache;
-  const [gpuNames, encoders] = await Promise.all([detectGpuNames(), readFfmpegEncoders(ffmpegPath)]);
-  const names = gpuNames.join(" ").toLowerCase();
-  const hasEncoder = (encoder: string) => encoders.includes(encoder);
-  if (/(nvidia|geforce|rtx|gtx|quadro)/i.test(names) && hasEncoder("h264_nvenc")) accelerationCache = { encoder: "h264_nvenc", label: "独显加速：NVIDIA NVENC", gpuNames, dedicated: true };
-  else if (/(amd|radeon|rx\s?\d)/i.test(names) && hasEncoder("h264_amf")) accelerationCache = { encoder: "h264_amf", label: "独显加速：AMD AMF", gpuNames, dedicated: true };
-  else if (/(intel.*arc|arc.*intel)/i.test(names) && hasEncoder("h264_qsv")) accelerationCache = { encoder: "h264_qsv", label: "独显加速：Intel Quick Sync", gpuNames, dedicated: true };
-  else accelerationCache = cpuAcceleration(gpuNames);
-  return accelerationCache;
-}
-
-function cpuAcceleration(gpuNames: string[] = []): VideoAcceleration {
-  return { encoder: "libx264", label: `CPU 多线程：${Math.max(1, os.cpus().length)} 线程`, gpuNames, dedicated: false };
-}
-
-function encoderArgs(acceleration: VideoAcceleration) {
-  if (acceleration.encoder === "h264_nvenc") return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "21"];
-  if (acceleration.encoder === "h264_amf") return ["-c:v", "h264_amf", "-quality", "speed", "-qp_i", "21", "-qp_p", "23"];
-  if (acceleration.encoder === "h264_qsv") return ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"];
-  return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-threads", String(Math.max(1, os.cpus().length))];
+function encoderArgs() {
+  return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-threads", String(cpuThreads)];
 }
 
 async function readFfmpegEncoders(ffmpegPath: string) {
   const result = await runProcess(ffmpegPath, ["-hide_banner", "-encoders"]);
   return result.output.toLowerCase();
-}
-
-async function detectGpuNames() {
-  const result = await runProcess("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]);
-  return result.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 }
 
 function runProcess(command: string, args: string[]): Promise<{ code: number | null; output: string }> {
@@ -798,8 +825,9 @@ function emitVideoProgress(taskId: string, percent: number, stage: string, curre
 }
 
 function runFfmpeg(ffmpegPath: string, args: string[], taskId?: string, stage = "剪辑中", duration?: number): Promise<VideoRenderResult> {
+  const argsLog = `[ffmpeg cmd] ${ffmpegPath} ${args.map((a) => /[\s"']/.test(a) ? `"${a}"` : a).join(" ")}\n`;
   return new Promise((resolve) => {
-    let log = "";
+    let log = argsLog;
     let lastPercent = 15;
     const child = spawn(ffmpegPath, args, { windowsHide: true });
     child.stdout.on("data", (chunk) => (log += String(chunk)));
@@ -815,24 +843,38 @@ function runFfmpeg(ffmpegPath: string, args: string[], taskId?: string, stage = 
       }
     });
     child.on("error", (error) => resolve({ success: false, log, error: error.message }));
-    child.on("exit", (code) => resolve({ success: code === 0, log, error: code === 0 ? undefined : parseFfmpegError(log, code) }));
+    child.on("exit", (code) => {
+      const signedCode = code !== null && code > 0x7FFFFFFF ? code - 0x100000000 : code;
+      resolve({ success: code === 0, log, error: code === 0 ? undefined : parseFfmpegError(log, signedCode) });
+    });
   });
 }
 
 function parseFfmpegError(log: string, code: number | null): string {
   const lower = log.toLowerCase();
+  const logLines = log.split(/\r?\n/).filter(Boolean);
+  const errorLines = logLines.filter((line) => /error|invalid|fail|cannot|denied|not found/i.test(line)).slice(-3);
+  const contextTail = errorLines.length ? errorLines.join("\n") : log.slice(-200).trim();
+
   if (/no such file|does not exist/i.test(log)) return "输入文件不存在，请检查素材路径是否正确。";
-  if (/invalid data found|invalid argument/i.test(log)) return "素材文件格式损坏或不支持，请更换文件后重试。";
+  if (/invalid data found when processing input/i.test(log)) return "素材文件格式损坏或不支持，请更换文件后重试。";
   if (/codec not found|encoder.*not found|unknown encoder/i.test(log)) return "缺少必要的编码器，请使用诊断修复检查 FFmpeg 安装。";
-  if (/crop/i.test(lower) && /invalid|error/i.test(lower)) return "图片尺寸问题导致裁剪失败，请更换图片后重试。";
   if (/permission denied/i.test(log)) return "输出目录没有写入权限，请检查输出文件夹权限。";
   if (/out of memory|cannot allocate/i.test(lower)) return "内存不足，请关闭其他程序后重试。";
   if (/device or resource busy/i.test(lower)) return "输出文件被占用，请关闭使用该文件的程序。";
-  return `FFmpeg 退出码 ${code}，请使用诊断修复功能排查。`;
+  if (/nothing was written into output file/i.test(log)) {
+    if (/no audio/i.test(log) || !/Stream\s+#\d+:\d+.*Audio/i.test(log)) return "输出文件为空：视频没有音频轨道导致合成失败，程序已自动适配。如果仍然报错请使用诊断修复。";
+    return `输出文件为空：可能是编码器与素材不兼容。\n${contextTail}`;
+  }
+  if (/invalid argument/i.test(log) && /encoder/i.test(log)) return `硬件编码器参数不兼容，尝试切换 CPU 编码。\n${contextTail}`;
+  if (/invalid argument/i.test(log)) return `FFmpeg 参数错误（退出码 ${code}），请使用诊断修复排查。\n${contextTail}`;
+  if (/error while opening encoder/i.test(log)) return `编码器初始化失败，可能是硬件加速不兼容。\n${contextTail}`;
+  if (/conversion failed/i.test(log)) return `格式转换失败，素材可能不兼容。\n${contextTail}`;
+  return `FFmpeg 退出码 ${code}：${contextTail || "无详细日志，请使用诊断修复功能排查。"}`;
 }
 
 async function estimateTaskDuration(ffmpegPath: string, task: VideoRenderPayload["task"]) {
-  if (task.template === "video-slice") return 6;
+  if (task.template === "video-slice") return 15;
   if (!task.videoPath) return undefined;
   const result = await runProcess(ffmpegPath, ["-hide_banner", "-i", task.videoPath]);
   const match = result.output.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
@@ -878,9 +920,7 @@ async function diagnoseFfmpeg(settings: AppSettings): Promise<FfmpegDiagnosisRes
     if (!has) suggestions.push(`缺少 ${enc.label}，请下载完整版 FFmpeg。`);
   }
 
-  const acceleration = await detectVideoAcceleration(ffmpegPath);
-  items.push({ label: "硬件加速", passed: acceleration.dedicated, detail: acceleration.label });
-  if (!acceleration.dedicated) suggestions.push("未检测到独显硬件加速，将使用 CPU 编码（速度较慢但功能正常）。");
+  items.push({ label: "编码模式", passed: true, detail: `CPU 多线程：${cpuThreads} 线程` });
 
   const testResult = await runFfmpeg(ffmpegPath, [
     "-y", "-hide_banner",
@@ -888,11 +928,190 @@ async function diagnoseFfmpeg(settings: AppSettings): Promise<FfmpegDiagnosisRes
     "-c:v", "libx264", "-preset", "ultrafast",
     "-f", "null", os.platform() === "win32" ? "NUL" : "/dev/null"
   ]);
-  items.push({ label: "编码测试", passed: testResult.success, detail: testResult.success ? "编码功能正常" : `测试失败：${testResult.error}` });
-  if (!testResult.success) suggestions.push("FFmpeg 编码测试失败，可能文件损坏，建议重新下载。");
+  items.push({ label: "视频编码测试", passed: testResult.success, detail: testResult.success ? "视频编码功能正常" : `测试失败：${testResult.error}` });
+  if (!testResult.success) suggestions.push("FFmpeg 视频编码测试失败，可能文件损坏，建议重新下载。");
+
+  const audioTestResult = await runFfmpeg(ffmpegPath, [
+    "-y", "-hide_banner",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1",
+    "-c:a", "aac",
+    "-f", "null", os.platform() === "win32" ? "NUL" : "/dev/null"
+  ]);
+  items.push({ label: "音频编码测试", passed: audioTestResult.success, detail: audioTestResult.success ? "音频编码功能正常" : `测试失败：${audioTestResult.error}` });
+  if (!audioTestResult.success) suggestions.push("FFmpeg 音频编码测试失败，AAC 编码器可能不可用。");
+
+  const concatTest = await runFfmpeg(ffmpegPath, [
+    "-y", "-hide_banner",
+    "-f", "lavfi", "-i", "color=c=red:s=320x240:d=0.1:r=30",
+    "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=0.1:r=30",
+    "-filter_complex", "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]concat=n=2:v=1:a=0[out]",
+    "-map", "[out]",
+    "-c:v", "libx264", "-preset", "ultrafast",
+    "-f", "null", os.platform() === "win32" ? "NUL" : "/dev/null"
+  ]);
+  items.push({ label: "滤镜拼接测试", passed: concatTest.success, detail: concatTest.success ? "filter_complex + concat 正常" : `测试失败：${concatTest.error}` });
+  if (!concatTest.success) suggestions.push("视频拼接滤镜测试失败，FFmpeg 可能版本过低或编译缺少 filter 支持。");
+
+  const outputDir = settings.videoOutputDir;
+  if (outputDir) {
+    const writable = await testDirectoryWritable(outputDir);
+    items.push({ label: "输出目录可写", passed: writable, detail: writable ? `可写：${outputDir}` : `无法写入：${outputDir}` });
+    if (!writable) suggestions.push("输出目录没有写入权限，请在设置中更换输出文件夹。");
+  }
 
   if (!suggestions.length) suggestions.push("FFmpeg 运行正常，所有检查项通过。");
   return { items, suggestions, ok: items.every((item) => item.passed) };
+}
+
+async function testDirectoryWritable(dir: string): Promise<boolean> {
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const testFile = path.join(dir, `.write-test-${Date.now()}.tmp`);
+    await fs.writeFile(testFile, "test", "utf-8");
+    await fs.unlink(testFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface AutoFixResult {
+  fixed: string[];
+  failed: string[];
+  settingsPatch: Partial<AppSettings> | null;
+}
+
+async function autoFixFfmpeg(settings: AppSettings): Promise<AutoFixResult> {
+  const fixed: string[] = [];
+  const failed: string[] = [];
+  let settingsPatch: Partial<AppSettings> | null = null;
+
+  const currentPath = resolveFfmpegPath(settings);
+  if (!currentPath) {
+    const found = await searchFfmpegOnSystem();
+    if (found) {
+      settingsPatch = { ffmpegPath: found };
+      fixed.push(`在系统中找到了 FFmpeg：${found}`);
+    } else {
+      await shell.openExternal("https://www.gyan.dev/ffmpeg/builds/");
+      failed.push("系统中未找到 FFmpeg，已打开下载页面。下载 release essentials 版本，解压后把 ffmpeg.exe 放入任意文件夹，再回来在设置中指定路径即可。");
+    }
+  } else {
+    fixed.push(`FFmpeg 已可用：${currentPath}`);
+  }
+
+  if (settings.videoOutputDir) {
+    try {
+      await fs.mkdir(settings.videoOutputDir, { recursive: true });
+      const writable = await testDirectoryWritable(settings.videoOutputDir);
+      if (writable) {
+        fixed.push("输出目录已就绪");
+      } else {
+        const fallback = path.join(os.homedir(), "Desktop", "视频输出");
+        await fs.mkdir(fallback, { recursive: true });
+        settingsPatch = { ...settingsPatch, videoOutputDir: fallback };
+        fixed.push(`原输出目录无法写入，已切换到：${fallback}`);
+      }
+    } catch {
+      const fallback = path.join(os.homedir(), "Desktop", "视频输出");
+      try {
+        await fs.mkdir(fallback, { recursive: true });
+        settingsPatch = { ...settingsPatch, videoOutputDir: fallback };
+        fixed.push(`已创建输出目录：${fallback}`);
+      } catch {
+        failed.push("无法创建输出目录");
+      }
+    }
+  } else {
+    const defaultDir = path.join(os.homedir(), "Desktop", "视频输出");
+    try {
+      await fs.mkdir(defaultDir, { recursive: true });
+      settingsPatch = { ...settingsPatch, videoOutputDir: defaultDir };
+      fixed.push(`已自动设置输出目录：${defaultDir}`);
+    } catch {
+      failed.push("无法创建默认输出目录");
+    }
+  }
+
+  if (!settings.videoLibraryDir) {
+    failed.push("视频库文件夹未设置，请在设置中手动选择你的素材文件夹。");
+  }
+
+  return { fixed, failed, settingsPatch };
+}
+
+async function searchFfmpegOnSystem(): Promise<string | null> {
+  const candidates = [
+    path.join(process.resourcesPath, "bin", "ffmpeg.exe"),
+    path.join(app.getAppPath(), "bin", "ffmpeg.exe"),
+    path.join(os.homedir(), "Desktop", "ffmpeg.exe"),
+    path.join(os.homedir(), "Desktop", "ffmpeg", "bin", "ffmpeg.exe"),
+    path.join(os.homedir(), "Downloads", "ffmpeg.exe"),
+    path.join(os.homedir(), "Downloads", "ffmpeg", "bin", "ffmpeg.exe"),
+  ];
+  const programDirs = [
+    process.env["ProgramFiles"] || "C:\\Program Files",
+    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
+    process.env["LOCALAPPDATA"] || ""
+  ].filter(Boolean);
+  for (const dir of programDirs) {
+    candidates.push(
+      path.join(dir, "ffmpeg", "bin", "ffmpeg.exe"),
+      path.join(dir, "ffmpeg", "ffmpeg.exe")
+    );
+  }
+  const found = candidates.find((p) => existsSync(p));
+  if (found) return found;
+
+  try {
+    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+      execFile("where", ["ffmpeg.exe"], { timeout: 5000 }, (err, stdout) => {
+        if (err) reject(err);
+        else resolve({ stdout });
+      });
+    });
+    const firstLine = stdout.trim().split(/\r?\n/)[0];
+    if (firstLine && existsSync(firstLine)) return firstLine;
+  } catch {}
+
+  try {
+    const searchDirs = [
+      os.homedir(),
+      path.join(os.homedir(), "Desktop"),
+      path.join(os.homedir(), "Downloads"),
+      "D:\\",
+      "E:\\"
+    ];
+    for (const dir of searchDirs) {
+      if (!existsSync(dir)) continue;
+      const result = await quickFindFfmpeg(dir, 3);
+      if (result) return result;
+    }
+  } catch {}
+
+  return null;
+}
+
+async function quickFindFfmpeg(root: string, maxDepth: number, currentDepth = 0): Promise<string | null> {
+  if (currentDepth > maxDepth) return null;
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.toLowerCase() === "ffmpeg.exe" && !entry.isDirectory()) {
+        return path.join(root, entry.name);
+      }
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const name = entry.name.toLowerCase();
+      if (name === "node_modules" || name === ".git" || name === "windows" || name === "$recycle.bin") continue;
+      if (name.includes("ffmpeg") || name === "bin" || name === "tools") {
+        const found = await quickFindFfmpeg(path.join(root, entry.name), maxDepth, currentDepth + 1);
+        if (found) return found;
+      }
+    }
+  } catch {}
+  return null;
 }
 
 function imageSignature(image: Electron.NativeImage) {
@@ -944,40 +1163,204 @@ async function exportWorkbook(payload: ExportPayload): Promise<ExportResult> {
   return { canceled: false, filePath: saveResult.filePath };
 }
 
-let reviewFileCache: { root: string; files: string[]; folders: string[]; cachedAt: number } | null = null;
-const REVIEW_CACHE_TTL = 60_000;
+interface ReviewFileIndex {
+  path: string;
+  name: string;
+  relative: string;
+  fileText: string;
+  pathText: string;
+  folderNorm: string;
+  depth: number;
+}
 
-async function scanReviewAssets(root: string, query: string): Promise<ReviewSearchResult[]> {
+interface ReviewFolderIndex {
+  path: string;
+  name: string;
+  relative: string;
+  nameText: string;
+  pathText: string;
+  depth: number;
+  children: string[];
+}
+
+let reviewFileCache: {
+  root: string;
+  fileIndex: ReviewFileIndex[];
+  folderIndex: ReviewFolderIndex[];
+  cachedAt: number;
+} | null = null;
+const REVIEW_CACHE_TTL = 300_000;
+
+function buildReviewIndex(root: string, files: string[], folders: string[]): { fileIndex: ReviewFileIndex[]; folderIndex: ReviewFolderIndex[] } {
+  const folderChildMap = new Map<string, string[]>();
+  const fileIndex: ReviewFileIndex[] = files.map((filePath) => {
+    const parent = path.dirname(filePath);
+    const bucket = folderChildMap.get(parent);
+    if (bucket) { if (bucket.length < 12) bucket.push(filePath); }
+    else folderChildMap.set(parent, [filePath]);
+
+    const relative = path.relative(root, filePath);
+    const fileName = path.basename(filePath);
+    return {
+      path: filePath,
+      name: fileName,
+      relative,
+      fileText: normalizeMatchText(fileName),
+      pathText: normalizeMatchText(relative),
+      folderNorm: normalizeMatchText(path.dirname(relative)),
+      depth: relative.split(/[\\/]/).length - 1
+    };
+  });
+
+  const folderIndex: ReviewFolderIndex[] = folders.map((folderPath) => {
+    const relative = path.relative(root, folderPath);
+    return {
+      path: folderPath,
+      name: path.basename(folderPath),
+      relative,
+      nameText: normalizeMatchText(path.basename(folderPath)),
+      pathText: normalizeMatchText(relative),
+      depth: relative.split(/[\\/]/).length - 1,
+      children: folderChildMap.get(folderPath) ?? []
+    };
+  });
+
+  return { fileIndex, folderIndex };
+}
+
+function resolveEverythingEsPath(settings: AppSettings): string {
+  if (settings.everythingEsPath && existsSync(settings.everythingEsPath)) return settings.everythingEsPath;
+  const builtinEs = path.join(process.resourcesPath, "bin", "es.exe");
+  const devEs = path.join(app.getAppPath(), "bin", "es.exe");
+  const candidates = [
+    builtinEs,
+    devEs,
+    path.join(process.env["ProgramFiles"] || "C:\\Program Files", "Everything", "es.exe"),
+    path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Everything", "es.exe"),
+    path.join(process.env["LOCALAPPDATA"] || "", "Everything", "es.exe")
+  ];
+  return candidates.find((p) => existsSync(p)) ?? "";
+}
+
+function searchWithEverything(esPath: string, root: string, query: string, exts: Set<string>, maxResults = 500): Promise<string[]> {
+  return new Promise((resolve) => {
+    const extList = [...exts].map((e) => e.replace(".", "")).join(";");
+    const args = ["-n", String(maxResults), "-path", root, `ext:${extList}`];
+    if (query.trim()) args.push(query.trim());
+    execFile(esPath, args, { timeout: 10_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
+      if (error) { resolve([]); return; }
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      resolve(lines.filter((line) => existsSync(line)));
+    });
+  });
+}
+
+async function testEverythingConnection(settings: AppSettings): Promise<{ available: boolean; detail: string }> {
+  const esPath = resolveEverythingEsPath(settings);
+  if (!esPath) return { available: false, detail: "未找到 es.exe，请确认 Everything 已安装并在后台运行。" };
+  try {
+    const results = await searchWithEverything(esPath, "", "test", new Set([".txt"]), 1);
+    return { available: true, detail: `Everything 已就绪，搜索可用。` };
+  } catch {
+    return { available: false, detail: "es.exe 已找到但执行失败，请确认 Everything 主程序正在后台运行。" };
+  }
+}
+
+async function scanReviewAssets(root: string, query: string, settings?: AppSettings, event?: Electron.IpcMainInvokeEvent): Promise<ReviewSearchResult[]> {
   if (!root || !existsSync(root)) throw new Error("请先选择收评助手根目录。");
+
+  const scoringEnabled = settings?.reviewScoringEnabled ?? true;
+  const esPath = settings ? resolveEverythingEsPath(settings) : "";
+  if (esPath && query.trim()) {
+    const esResults = await searchWithEverything(esPath, root, query.trim(), imageExts, 500);
+    if (esResults.length > 0) {
+      const thumbPaths = esResults.slice(0, 60);
+      const thumbMap = batchThumbnails(thumbPaths, 180);
+      return esResults.map((filePath, index) => ({
+        path: filePath,
+        name: path.basename(filePath),
+        kind: "image" as const,
+        score: scoringEnabled ? Math.max(100 - index, 10) : 0,
+        reason: "Everything",
+        thumbnailDataUrl: thumbMap.get(filePath)
+      }));
+    }
+  }
 
   const now = Date.now();
   if (!reviewFileCache || reviewFileCache.root !== root || now - reviewFileCache.cachedAt > REVIEW_CACHE_TTL) {
-    const { files, folders } = await walkMediaAndFolders(root, imageExts, 10000);
-    reviewFileCache = { root, files, folders, cachedAt: now };
+    const disk = await loadReviewIndexFile(root);
+    if (disk) {
+      reviewFileCache = { root, fileIndex: disk.fileIndex, folderIndex: disk.folderIndex, cachedAt: now };
+      if (event) event.sender.send("review:scanProgress", { scanned: disk.fileIndex.length, currentDir: "", phase: "loaded-cache" });
+    } else {
+      if (event) event.sender.send("review:scanProgress", { scanned: 0, currentDir: root, phase: "start" });
+      const { files, folders } = await walkMediaAndFoldersWithProgress(root, imageExts, 50000, (scanned, currentDir) => {
+        if (event) event.sender.send("review:scanProgress", { scanned, currentDir, phase: "walking" });
+      });
+      const { fileIndex, folderIndex } = buildReviewIndex(root, files, folders);
+      reviewFileCache = { root, fileIndex, folderIndex, cachedAt: now };
+      void saveReviewIndexFile(root, fileIndex, folderIndex);
+      if (event) event.sender.send("review:scanProgress", { scanned: files.length, currentDir: "", phase: "indexed" });
+    }
   }
-  const { files, folders } = reviewFileCache;
+  const { fileIndex, folderIndex } = reviewFileCache;
   const terms = buildMatchTerms(query);
+  if (event) event.sender.send("review:scanProgress", { scanned: fileIndex.length, currentDir: "", phase: "scoring" });
 
-  const scoredImages = files.map((filePath) => {
-    const relative = path.relative(root, filePath);
-    const candidate = scorePathOnly(relative, filePath, terms);
-    return { path: filePath, name: path.basename(filePath), kind: "image" as const, score: candidate.score, reason: candidate.reason };
+  if (!scoringEnabled) {
+    const matchesImage = (item: ReviewFileIndex) => terms.length === 0 || terms.some((term) => item.fileText.includes(term) || item.folderNorm.includes(term) || item.pathText.includes(term));
+    const matchesFolder = (item: ReviewFolderIndex) => terms.length === 0 || terms.some((term) => item.nameText.includes(term) || item.pathText.includes(term));
+    const topImages = fileIndex
+      .filter(matchesImage)
+      .slice(0, 80)
+      .map((item) => ({ path: item.path, name: item.name, kind: "image" as const, score: 0, reason: "未启用评分" }));
+    const topFolders = folderIndex
+      .filter((item) => item.children.length > 0 && matchesFolder(item))
+      .slice(0, 30)
+      .map((item) => ({
+        path: item.path,
+        name: item.name,
+        kind: "folder" as const,
+        score: 0,
+        reason: "未启用评分",
+        children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片" }))
+      }));
+    const merged: ReviewSearchResult[] = [...topImages, ...topFolders].slice(0, 120);
+    const thumbPaths = new Set<string>();
+    for (const item of merged.slice(0, 60)) {
+      if (item.kind === "image") thumbPaths.add(item.path);
+      else if (item.children) item.children.slice(0, 4).forEach((c) => thumbPaths.add(c.path));
+    }
+    const thumbMap = batchThumbnails([...thumbPaths], 180);
+    for (const item of merged) {
+      if (item.kind === "image") item.thumbnailDataUrl = thumbMap.get(item.path);
+      else if (item.children) {
+        for (const child of item.children) child.thumbnailDataUrl = thumbMap.get(child.path);
+        item.thumbnailDataUrl = item.children[0]?.thumbnailDataUrl;
+      }
+    }
+    return merged;
+  }
+
+  const scoredImages = fileIndex.map((item) => {
+    const candidate = scoreIndexedFile(item, terms);
+    return { path: item.path, name: item.name, kind: "image" as const, score: candidate.score, reason: candidate.reason };
   });
   const topImages = scoredImages
     .filter((item) => item.score >= 28)
     .sort((a, b) => b.score - a.score)
     .slice(0, 80);
 
-  const scoredFolders = folders.map((folderPath) => {
-    const folderScore = scorePathCandidate(root, folderPath, terms);
-    const childPaths = files.filter((fp) => fp.startsWith(folderPath + path.sep)).slice(0, 12);
+  const scoredFolders = folderIndex.map((item) => {
+    const folderScore = scoreIndexedFolder(item, terms);
     return {
-      path: folderPath,
-      name: path.basename(folderPath),
+      path: item.path,
+      name: item.name,
       kind: "folder" as const,
       score: folderScore.score,
       reason: folderScore.reason,
-      children: childPaths.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片" }))
+      children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片" }))
     };
   });
   const topFolders = scoredFolders
@@ -1005,24 +1388,39 @@ async function scanReviewAssets(root: string, query: string): Promise<ReviewSear
   return merged;
 }
 
-function scorePathOnly(relative: string, filePath: string, terms: string[]) {
-  const fileName = path.basename(filePath);
-  const fileText = normalizeMatchText(fileName);
-  const pathText = normalizeMatchText(relative);
-  const folderNorm = normalizeMatchText(path.dirname(relative));
+function scoreIndexedFile(item: ReviewFileIndex, terms: string[]) {
   let score = 0;
   const reasons: string[] = [];
   for (const term of terms) {
     if (!term) continue;
-    if (fileText.includes(term)) { score += /\d/.test(term) ? 28 : 24; reasons.push(`文件名命中 ${term}`); }
-    else if (folderNorm.includes(term)) { score += /\d/.test(term) ? 24 : 20; reasons.push(`文件夹命中 ${term}`); }
-    else if (pathText.includes(term)) { score += 12; reasons.push(`路径命中 ${term}`); }
-    else { const overlap = tokenOverlap(term, pathText); if (overlap > 0.45) score += Math.round(overlap * 16); }
+    if (item.fileText.includes(term)) { score += /\d/.test(term) ? 28 : 24; reasons.push(`文件名命中 ${term}`); }
+    else if (item.folderNorm.includes(term)) { score += /\d/.test(term) ? 24 : 20; reasons.push(`文件夹命中 ${term}`); }
+    else if (item.pathText.includes(term)) { score += 12; reasons.push(`路径命中 ${term}`); }
+    else { const overlap = tokenOverlap(term, item.pathText); if (overlap > 0.45) score += Math.round(overlap * 16); }
   }
-  const depth = relative.split(/[\\/]/).length - 1;
-  score += Math.max(0, 10 - depth);
+  score += Math.max(0, 10 - item.depth);
   score += 4;
   return { score, reason: reasons.slice(0, 3).join("；") || "路径文字相似" };
+}
+
+function scoreIndexedFolder(item: ReviewFolderIndex, terms: string[]) {
+  let score = 0;
+  const reasons: string[] = [];
+  for (const term of terms) {
+    if (!term) continue;
+    if (item.nameText.includes(term)) {
+      score += /\d/.test(term) ? 32 : 26;
+      reasons.push(`文件夹命中 ${term}`);
+    } else if (item.pathText.includes(term)) {
+      score += /\d/.test(term) ? 22 : 18;
+      reasons.push(`路径命中 ${term}`);
+    } else {
+      const overlap = tokenOverlap(term, item.pathText);
+      if (overlap > 0.45) score += Math.round(overlap * 14);
+    }
+  }
+  score += Math.max(0, 12 - item.depth);
+  return { score, reason: reasons.slice(0, 3).join("；") || "文件夹名称相似" };
 }
 
 function batchThumbnails(paths: string[], maxSide: number): Map<string, string | undefined> {
@@ -1040,60 +1438,281 @@ async function loadReviewThumbnails(paths: string[]): Promise<Record<string, str
   return result;
 }
 
-function scorePathCandidate(root: string, targetPath: string, terms: string[]) {
-  const relative = path.relative(root, targetPath);
-  const nameText = normalizeMatchText(path.basename(targetPath));
-  const pathText = normalizeMatchText(relative);
-  let score = 0;
-  const reasons: string[] = [];
-  for (const term of terms) {
-    if (!term) continue;
-    if (nameText.includes(term)) {
-      score += /\d/.test(term) ? 32 : 26;
-      reasons.push(`文件夹命中 ${term}`);
-    } else if (pathText.includes(term)) {
-      score += /\d/.test(term) ? 22 : 18;
-      reasons.push(`路径命中 ${term}`);
-    } else {
-      const overlap = tokenOverlap(term, pathText);
-      if (overlap > 0.45) score += Math.round(overlap * 14);
-    }
+async function loadReviewThumbnailBatch(paths: string[], size = 220): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  const limited = paths.slice(0, 64);
+  for (let i = 0; i < limited.length; i++) {
+    const p = limited[i];
+    if (!existsSync(p)) continue;
+    const url = imageToDataUrl(p, size);
+    if (url) result[p] = url;
+    if (i % 6 === 5) await new Promise((resolve) => setImmediate(resolve));
   }
-  const depth = relative.split(/[\\/]/).length - 1;
-  score += Math.max(0, 12 - depth);
-  return { score, reason: reasons.slice(0, 3).join("；") || "文件夹名称相似" };
+  return result;
 }
 
+async function rebuildReviewIndex(root: string, event: Electron.IpcMainInvokeEvent): Promise<{ ok: boolean; total: number }> {
+  if (!root || !existsSync(root)) return { ok: false, total: 0 };
+  reviewFileCache = null;
+  await deleteReviewIndexFile(root);
+  const startedAt = Date.now();
+  const { files, folders } = await walkMediaAndFoldersWithProgress(root, imageExts, 50000, (scanned, currentDir) => {
+    event.sender.send("review:scanProgress", { scanned, currentDir, phase: "walking" });
+  });
+  const { fileIndex, folderIndex } = buildReviewIndex(root, files, folders);
+  reviewFileCache = { root, fileIndex, folderIndex, cachedAt: Date.now() };
+  await saveReviewIndexFile(root, fileIndex, folderIndex);
+  event.sender.send("review:scanProgress", { scanned: files.length, currentDir: "", phase: "done", elapsedMs: Date.now() - startedAt });
+  return { ok: true, total: files.length };
+}
+
+function startDragFiles(event: Electron.IpcMainInvokeEvent, paths: string[]): void {
+  const validPaths = (paths || []).filter((p) => p && existsSync(p));
+  if (validPaths.length === 0) return;
+  let icon = nativeImage.createFromPath(validPaths[0]);
+  if (icon.isEmpty()) {
+    const fallbackPath = path.join(process.resourcesPath || app.getAppPath(), "build", "icon.png");
+    if (existsSync(fallbackPath)) icon = nativeImage.createFromPath(fallbackPath);
+  }
+  if (!icon.isEmpty()) {
+    icon = icon.resize({ width: 64, height: 64, quality: "good" });
+  } else {
+    icon = nativeImage.createEmpty();
+  }
+  try {
+    event.sender.startDrag({ file: validPaths[0], files: validPaths, icon: icon.isEmpty() ? nativeImage.createFromBuffer(Buffer.alloc(0)) : icon });
+  } catch (error) {
+    appendLog("warn", "startDrag 失败", { message: (error as Error).message, count: validPaths.length });
+  }
+}
+
+async function deleteReviewIndexFile(root: string): Promise<void> {
+  try {
+    const filePath = reviewIndexFilePath(root);
+    if (existsSync(filePath)) await fs.unlink(filePath);
+  } catch {}
+}
+
+function reviewIndexFilePath(root: string): string {
+  const safe = Buffer.from(root).toString("base64").replace(/[/+=]/g, "_").slice(0, 64);
+  return path.join(app.getPath("userData"), `review-index-${safe}.json`);
+}
+
+async function saveReviewIndexFile(root: string, fileIndex: ReviewFileIndex[], folderIndex: ReviewFolderIndex[]): Promise<void> {
+  try {
+    const filePath = reviewIndexFilePath(root);
+    const payload = { root, savedAt: Date.now(), fileIndex, folderIndex };
+    await fs.writeFile(filePath, JSON.stringify(payload), "utf-8");
+  } catch (error) {
+    appendLog("warn", "保存收评索引失败", { message: (error as Error).message });
+  }
+}
+
+async function loadReviewIndexFile(root: string): Promise<{ fileIndex: ReviewFileIndex[]; folderIndex: ReviewFolderIndex[] } | null> {
+  try {
+    const filePath = reviewIndexFilePath(root);
+    if (!existsSync(filePath)) return null;
+    const stats = await fs.stat(filePath);
+    if (Date.now() - stats.mtimeMs > REVIEW_INDEX_DISK_TTL) return null;
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as { root: string; fileIndex?: ReviewFileIndex[]; folderIndex?: ReviewFolderIndex[] };
+    if (parsed.root !== root) return null;
+    return { fileIndex: parsed.fileIndex || [], folderIndex: parsed.folderIndex || [] };
+  } catch {
+    return null;
+  }
+}
+
+const REVIEW_INDEX_DISK_TTL = 1000 * 60 * 60 * 24 * 7;
+
+async function walkMediaAndFoldersWithProgress(
+  root: string,
+  allowed: Set<string>,
+  maxItems: number,
+  onProgress?: (scanned: number, currentDir: string) => void
+): Promise<{ files: string[]; folders: string[] }> {
+  const files: string[] = [];
+  const folders: string[] = [];
+  let lastReport = Date.now();
+  async function walk(dir: string) {
+    if (files.length >= maxItems) return;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        folders.push(fullPath);
+        await walk(fullPath);
+      } else if (allowed.has(path.extname(entry.name).toLowerCase())) {
+        files.push(fullPath);
+        if (files.length % 200 === 0) {
+          const now = Date.now();
+          if (onProgress && now - lastReport > 80) {
+            onProgress(files.length, dir);
+            lastReport = now;
+          }
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      }
+      if (files.length >= maxItems) break;
+    }
+  }
+  if (root && existsSync(root)) await walk(root);
+  if (onProgress) onProgress(files.length, "");
+  return { files, folders };
+}
+
+async function enhanceTitlePoolWithLLM(
+  settings: AppSettings,
+  payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }
+): Promise<{ ok: boolean; selected: string[]; suggested: string[]; reason?: string }> {
+  try {
+    const normalized = normalizeSettings(settings);
+    if (!normalized.titleAiSelectionEnabled) return { ok: false, selected: [], suggested: [], reason: "已关闭 AI 选词" };
+    const profile = getReviewApiProfile(normalized);
+    if (!profile.apiBaseUrl || !profile.apiKey) return { ok: false, selected: [], suggested: [], reason: "未配置 API" };
+    const top = (payload.pool || []).slice(0, 30).map((t) => t.text).filter(Boolean);
+    if (top.length === 0) return { ok: false, selected: [], suggested: [], reason: "候选词为空" };
+    const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
+    const userPrompt = [
+      `你是淘宝男装关键词搜索专家。`,
+      `商品："${payload.productName}"${payload.categoryName ? `，类目："${payload.categoryName}"` : ""}。`,
+      `下面是从市场数据中提取的候选关键词，请：`,
+      `1. 从中选出最贴合这件商品的 10-15 个（考虑材质、版型、季节匹配）`,
+      `2. 额外推荐 3-5 个未列出但同样相关的高搜索量关键词（不超过 6 个汉字/12 字节）`,
+      `严格只返回 JSON，不要任何解释：{"selected":["..."],"suggested":["..."]}`,
+      ``,
+      `候选词列表：${top.join("、")}`
+    ].join("\n");
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${profile.apiKey}` },
+      body: JSON.stringify({
+        model: profile.textModel || "gpt-4o-mini",
+        temperature: 0.5,
+        max_tokens: 400,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "你是淘宝男装关键词专家，严格返回 JSON。" },
+          { role: "user", content: userPrompt }
+        ]
+      })
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HTTP ${response.status} ${text.slice(0, 200)}`);
+    }
+    const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const content = json.choices?.[0]?.message?.content || "";
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("响应中未找到 JSON");
+    const parsed = JSON.parse(match[0]) as { selected?: string[]; suggested?: string[] };
+    const cleanList = (arr: unknown): string[] =>
+      Array.isArray(arr)
+        ? arr.map((x) => String(x || "").trim())
+            .filter((x) => x.length > 0 && x.length <= 12 && !/[\d.,，。?？!！]/.test(x))
+            .slice(0, 20)
+        : [];
+    return {
+      ok: true,
+      selected: cleanList(parsed.selected),
+      suggested: cleanList(parsed.suggested)
+    };
+  } catch (error) {
+    appendLog("warn", "LLM 选词失败，降级为纯算法", { message: (error as Error).message });
+    return { ok: false, selected: [], suggested: [], reason: (error as Error).message };
+  }
+}
+
+
 async function generateReviewCopy(settings: AppSettings, options: ReviewGenerationOptions): Promise<ReviewGenerationResult> {
-  const profile = getActiveApiProfile(normalizeSettings(settings));
+  const normalizedSettings = normalizeSettings(settings);
+  const profile = getReviewApiProfile(normalizedSettings);
   if (!profile.apiBaseUrl || !profile.apiKey) throw new Error("请先在设置中填写 API Base URL 和 API Key。");
   const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
+  const targetLength = Math.min(300, Math.max(30, Math.round(Number(options.targetLength) || normalizedSettings.reviewTargetLength)));
+  const thinkingMode = options.thinkingMode || normalizedSettings.reviewThinkingMode;
+  const thinkingEffort = options.thinkingEffort || normalizedSettings.reviewThinkingEffort;
+
+  const allAngles = [
+    "面料与体感（触感、透气性、柔软度、亲肤感）",
+    "版型与身材修饰（是否显瘦、显高、合身度、宽松感）",
+    "设计细节与风格（颜色搭配、图案、小设计、质感）",
+    "场景体验（上班通勤、约会、户外活动、居家的实际感受）",
+    "整体价值与搭配性（性价比、百搭程度、复购意愿）",
+    "洗护与耐用性（洗后是否变形、褪色、起球等持久表现）"
+  ];
+  const openerStyles = [
+    "直接描述收到的第一感受",
+    "从一个具体穿着场景开始",
+    "先说一个出乎意料的优点",
+    "用对比手法（比预期好/跟之前买的不同）",
+    "从朋友/同事的反馈切入",
+    "先说整体印象再聚焦细节"
+  ];
+
+  const seed = options.batchSeed;
+  const shuffled = [...allAngles].sort((_, __) => Math.sin(seed * 7 + allAngles.indexOf(_)) - 0.5);
+  const pickedAngles = shuffled.slice(0, 4);
+  const opener = openerStyles[(seed - 1) % openerStyles.length];
+
+  const systemPrompt = [
+    "你是电商文案专家，擅长从商品特征中提炼卖点，用极简生动的语言写出真实买家好评。",
+    "核心原则：",
+    "- 每条评价必须从买家真实使用角度出发，像是真人写的而非AI",
+    "- 自然融入一个具体穿着或使用场景（通勤、约会、周末、运动等）",
+    "- 6条评价之间必须在句式结构、开场白、侧重点和收尾方式上明显不同",
+    "- 杜绝千篇一律的模板感，禁止出现相似的开头或句式",
+    `- 每条评价尽量接近 ${targetLength} 个中文字，允许自然浮动 20%，不要硬凑字数`,
+    `- 思考模式：${thinkingMode}；思考程度：${thinkingEffort}。先在内部规划角度差异，再只输出最终文案。`
+  ].join("\n");
+
   const prompt = [
-    "你是电商收评助手，请生成 6 条中文买家好评文案。",
-    "要求：不要编号；每条 25-70 字；自然、不重复；只返回 JSON：{\"copies\":[\"...\"]}。",
+    "请生成 6 条中文买家好评文案。严格遵守以下要求：",
+    "",
     `商品/搜索词：${options.query}`,
     `商品补充描述：${options.productDescription || "无"}`,
-    `Emoji 程度 0-5：${options.emojiLevel}`,
-    `专业程度 0-5：${options.professionalLevel}`,
-    `买家视角 0-5：${options.buyerLevel}`,
-    `语气夸张 0-5：${options.exaggerationLevel}`,
-    `场景化表达 0-5：${options.sceneLevel}`,
-    `是否提到性价比：${options.mentionValue ? "是" : "否"}`,
-    `参考图片数量：${options.selectedPaths.length}`,
-    `换一批随机种子：${options.batchSeed}`
+    "",
+    "【风格参数】",
+    `Emoji 使用程度（0无~5多）：${options.emojiLevel}`,
+    `专业程度（0口语化~5专业）：${options.professionalLevel}`,
+    `买家视角真实感（0一般~5很强）：${options.buyerLevel}`,
+    `语气夸张程度（0朴素~5夸张）：${options.exaggerationLevel}`,
+    `场景化表达（0弱~5强）：${options.sceneLevel}`,
+    `提到性价比：${options.mentionValue ? "是" : "否"}`,
+    `目标字数：每条约 ${targetLength} 字`,
+    `思考模式：${thinkingMode}，思考程度：${thinkingEffort}`,
+    "",
+    "【本批次多样性要求】",
+    `本次 6 条文案请分别从以下角度切入（每条选一个不同角度）：`,
+    ...pickedAngles.map((a, i) => `  ${i + 1}. ${a}`),
+    `  5-6. 自由发挥，但不能与上面4个角度重复`,
+    `本次开场风格偏好：${opener}`,
+    "",
+    "【格式】不要编号，只返回 JSON：{\"copies\":[\"...\"]}"
   ].join("\n");
+
+  const customPrompt = normalizedSettings.reviewCustomPrompt?.trim();
+  const finalSystemPrompt = customPrompt ? `${systemPrompt}\n\n用户自定义要求：\n${customPrompt}` : systemPrompt;
+  const requestBody: Record<string, unknown> = {
+    model: profile.textModel || settings.textModel,
+    temperature: thinkingMode === "deep" ? 0.82 : thinkingMode === "fast" ? 0.75 : 0.92,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: finalSystemPrompt },
+      { role: "user", content: prompt }
+    ]
+  };
+  if (thinkingMode !== "off") requestBody.reasoning_effort = thinkingEffort;
+
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${profile.apiKey}` },
-    body: JSON.stringify({
-      model: profile.textModel || settings.textModel,
-      temperature: 0.85,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "你擅长写真实、多样、不机械的中文电商好评。" },
-        { role: "user", content: prompt }
-      ]
-    })
+    body: JSON.stringify(requestBody)
   });
   if (!response.ok) throw new Error(`AI 生成失败：${response.status} ${await response.text()}`);
   const data = await response.json();
@@ -1102,14 +1721,19 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
   return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, 8) : [] };
 }
 
-async function installLocalOcr(): Promise<LocalOcrStatus> {
-  if (ocrStatus.state === "installing") return ocrStatus;
-  ocrStatus = { state: "installing", detail: "正在准备本地 OCR 环境" };
-  const installDir = userDataPath("local-ocr");
-  await fs.mkdir(installDir, { recursive: true });
-  await fs.writeFile(path.join(installDir, "README.txt"), "本目录用于后续接入真实本地 OCR 服务。\n", "utf-8");
-  ocrStatus = { state: "ready", detail: "本地 OCR 安装入口已就绪，真实识别引擎待接入。" };
-  return ocrStatus;
+async function listAvailableModels(settings: AppSettings): Promise<{ id: string; name: string }[]> {
+  const profile = getReviewApiProfile(normalizeSettings(settings));
+  if (!profile.apiBaseUrl || !profile.apiKey) return [];
+  const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/models`;
+  try {
+    const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${profile.apiKey}` } });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const models = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+    return models.map((m: Record<string, unknown>) => ({ id: String(m.id || m.model || ""), name: String(m.id || m.model || "") })).filter((m: { id: string }) => m.id);
+  } catch {
+    return [];
+  }
 }
 
 function configureAutoUpdater(settings: AppSettings) {
@@ -1179,13 +1803,20 @@ app.whenReady().then(async () => {
   ipcMain.handle("title:generateCandidates", (_event, settings: AppSettings, payload: TitleGeneratePayload) => generateTitleCandidates(settings, payload));
   ipcMain.handle("ffmpeg:status", (_event, settings: AppSettings) => getFfmpegStatus(settings));
   ipcMain.handle("ffmpeg:diagnose", (_event, settings: AppSettings) => diagnoseFfmpeg(settings));
+  ipcMain.handle("ffmpeg:autoFix", (_event, settings: AppSettings) => autoFixFfmpeg(normalizeSettings(settings)));
   ipcMain.handle("video:scanLibrary", (_event, settings: AppSettings, productName: string, colorName: string) => scanVideoLibrary(settings, productName, colorName));
   ipcMain.handle("video:renderTask", (_event, payload: VideoRenderPayload) => renderVideoTask(payload));
   ipcMain.handle("media:latestImage", (_event, dir: string) => latestImageInDirectory(dir));
   ipcMain.handle("media:imagePreview", (_event, filePath: string) => imageToDataUrl(filePath, 960) ?? "");
-  ipcMain.handle("review:scanAssets", (_event, root: string, query: string) => scanReviewAssets(root, query));
+  ipcMain.handle("review:scanAssets", (event, root: string, query: string, settings?: AppSettings) => scanReviewAssets(root, query, settings ? normalizeSettings(settings) : undefined, event));
   ipcMain.handle("review:loadThumbnails", (_event, paths: string[]) => loadReviewThumbnails(paths));
+  ipcMain.handle("review:loadThumbnailBatch", (_event, paths: string[], size?: number) => loadReviewThumbnailBatch(paths, size));
+  ipcMain.handle("review:rebuildIndex", (event, root: string) => rebuildReviewIndex(root, event));
   ipcMain.handle("review:generateCopy", (_event, settings: AppSettings, options: ReviewGenerationOptions) => generateReviewCopy(settings, options));
+  ipcMain.handle("drag:startFiles", (event, paths: string[]) => startDragFiles(event, paths));
+  ipcMain.handle("title:enhancePool", (_event, settings: AppSettings, payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }) => enhanceTitlePoolWithLLM(settings, payload));
+  ipcMain.handle("ai:listModels", (_event, settings: AppSettings) => listAvailableModels(settings));
+  ipcMain.handle("everything:test", (_event, settings: AppSettings) => testEverythingConnection(normalizeSettings(settings)));
   ipcMain.handle("update:check", (_event, settings: AppSettings) => checkForUpdates(settings));
   ipcMain.handle("update:download", () => autoUpdater.downloadUpdate());
   ipcMain.handle("update:install", () => autoUpdater.quitAndInstall(false, true));
@@ -1198,13 +1829,6 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("clipboard:writeText", (_event, text: string) => clipboard.writeText(text));
   ipcMain.handle("export:workbook", (_event, payload: ExportPayload) => exportWorkbook(payload));
-  ipcMain.handle("ocr:status", () => ocrStatus);
-  ipcMain.handle("ocr:install", () => installLocalOcr());
-  ipcMain.handle("ocr:localRecognize", async (_event, imageDataUrl: string) => {
-    const image = nativeImage.createFromDataURL(imageDataUrl);
-    if (image.isEmpty()) throw new Error("图片为空，无法进行本地 OCR。");
-    throw new Error("本地 OCR 服务尚未绑定真实识别引擎，请先使用云端 OCR。");
-  });
 
   createWindow();
   const settings = await loadSettings();
@@ -1216,6 +1840,9 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("window-all-closed", () => {
+app.on("window-all-closed", async () => {
+  try {
+    await saveVideoWorkbenchState(DEFAULT_VIDEO_WORKBENCH_STATE);
+  } catch {}
   if (process.platform !== "darwin") app.quit();
 });

@@ -8,8 +8,11 @@ import type {
   TitleKeywordEntry,
   TitleKeywordHit,
   TitleProductProfile,
+  TitleRecommendation,
   TitleRuleCheck,
-  TitleScoreResult
+  TitleScoreBreakdown,
+  TitleScoreResult,
+  SubstringHit
 } from "./shared";
 
 export const TITLE_PREFIX = "帛先生";
@@ -34,7 +37,8 @@ const THIRD_PARTY_BRANDS = [
   "levi"
 ];
 
-const SEASONS = ["春季", "夏季", "秋季", "冬季", "春秋", "四季", "早春", "初秋"];
+const SEASONS = ["春季", "夏季", "秋季", "冬季", "春秋", "四季", "早春", "初秋", "春夏", "秋冬"];
+const SEASON_CHARS = ["春", "夏", "秋", "冬"];
 const SUPPLEMENT_WORDS = ["薄款", "垂感", "凉感", "2026新款", "运动", "宽松", "阔腿"];
 const GENERIC_FILLERS = ["百搭", "通勤", "潮流", "高级感", "小个子", "不挑人", "舒适", "显瘦", "松紧腰", "大码", "商务", "休闲"];
 const SHORT_FILLERS = ["透气", "百搭", "男", "款", "新款", "春夏", "潮牌", "冰丝", "尼龙", "中裤", "加长"];
@@ -105,6 +109,7 @@ interface GenerationContext {
   selectedCategory?: string;
   requestedCategory?: string;
   scoreEntries: TitleKeywordEntry[];
+  keywordIndex: Map<string, TitleKeywordEntry>;
   tokenValueCache: Map<string, number>;
   scoreCache: Map<string, number>;
   overlapRoots?: Map<string, number>;
@@ -168,7 +173,9 @@ export function containsThirdPartyBrand(value: string): boolean {
 
 export function parseTitleProduct(productName: string): TitleProductProfile {
   const normalizedName = normalizeTitleText(productName);
-  const season = SEASONS.find((item) => normalizedName.includes(item)) ?? "";
+  const season = SEASONS.find((item) => normalizedName.includes(item))
+    ?? SEASON_CHARS.find((ch) => normalizedName.includes(ch))
+    ?? "";
   const model = normalizedName.match(/[a-z]*\d+[a-z]*/i)?.[0] ?? "";
   const series = normalizedName.includes("彩棉")
     ? model
@@ -206,7 +213,7 @@ export function parseTitleProduct(productName: string): TitleProductProfile {
   };
 }
 
-export function generateTitleScore(data: TitleKeywordData, productName: string, categoryName?: string, variantCount = 3): TitleScoreResult {
+export function generateTitleScore(data: TitleKeywordData, productName: string, categoryName?: string, variantCount = 3, extraKeywords?: string[]): TitleScoreResult {
   const startedAt = Date.now();
   const product = parseTitleProduct(productName);
   const diagnostics: TitleGenerationDiagnostics = { poolSize: 0, recalledSize: 0, generatedCount: 0, elapsedMs: 0, exactFitCount: 0 };
@@ -221,7 +228,7 @@ export function generateTitleScore(data: TitleKeywordData, productName: string, 
 
   const category = selectCategory(data, product, categoryName);
   const context = createGenerationContext(data, product, category?.name, categoryName, diagnostics);
-  const poolResult = buildTokenPool(context);
+  const poolResult = buildTokenPool(context, extraKeywords);
   diagnostics.poolSize = poolResult.rawSize;
   diagnostics.recalledSize = poolResult.options.length;
 
@@ -238,7 +245,7 @@ export function generateTitleScore(data: TitleKeywordData, productName: string, 
 
   return {
     ok: unique.length > 0,
-    message: unique.length ? "已生成严格 54 字节标题主体。" : "硬规则词较多，未能拼出刚好 54 字节的合格标题。",
+    message: unique.length ? "已生成优化标题候选。" : "硬规则词较多，未能拼出合格标题。",
     product,
     selectedCategory: category?.name,
     candidates: unique,
@@ -250,7 +257,7 @@ export function generateTitleScore(data: TitleKeywordData, productName: string, 
   };
 }
 
-export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzePayload): TitleAnalysisResult {
+export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzePayload, extraKeywords?: string[]): TitleAnalysisResult {
   const startedAt = Date.now();
   const title = normalizeSubmittedTitle(payload.title);
   const product = parseTitleProduct(payload.productName || title);
@@ -269,7 +276,9 @@ export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzeP
       score: 0,
       grade: "blocked",
       candidate: null,
-      recommendations: ["缺少标题，无法进行字节、规则和关键词命中分析。"],
+      recommendations: [{ type: "missing-element" as const, message: "缺少标题", detail: "无法进行字节、规则和关键词命中分析", estimatedGain: 0 }],
+      substringHits: [],
+      suggestedTitles: [],
       warnings: data.warnings,
       diagnostics
     };
@@ -277,18 +286,28 @@ export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzeP
 
   const category = selectCategory(data, product, payload.categoryName);
   const context = createGenerationContext(data, product, category?.name, payload.categoryName, diagnostics);
-  const poolResult = buildTokenPool(context);
+  const poolResult = buildTokenPool(context, extraKeywords);
   diagnostics.poolSize = poolResult.rawSize;
   diagnostics.recalledSize = poolResult.options.length;
 
   const body = stripPrefix(title);
   const ruleChecks = evaluateTitleRules(title, product);
   const keywordHits = detectKeywordHits(title, data, context.scoreEntries);
-  const score = scoreAnalyzedTitle(title, product, ruleChecks, keywordHits, context);
+  const substringHits = scanSubstringHits(title, context.keywordIndex);
+  const { score, breakdown } = scoreAnalyzedTitle(title, product, ruleChecks, keywordHits, context);
   const grade = titleGrade(score, ruleChecks);
-  const recommendations = buildAnalysisRecommendations(title, product, ruleChecks, keywordHits, category?.name);
+  const recommendations = buildAnalysisRecommendations(title, product, ruleChecks, keywordHits, category?.name, context);
   const endingAdvice = buildEndingAdvice(title, product);
-  diagnostics.generatedCount = 1;
+
+  const rawSuggested = generateWorkingCandidates(poolResult.options, context);
+  const suggestedTitles = rawSuggested
+    .map((c, i) => toTitleCandidate(c, product, data, category?.name, i, context))
+    .filter((c): c is TitleCandidate => c !== null)
+    .filter((c) => c.title !== title)
+    .sort((a, b) => b.score - a.score);
+  const uniqueSuggested = dedupeCandidates(suggestedTitles).slice(0, 5);
+
+  diagnostics.generatedCount = 1 + uniqueSuggested.length;
   diagnostics.elapsedMs = Date.now() - startedAt;
 
   const candidate: TitleCandidate = {
@@ -303,7 +322,9 @@ export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzeP
     tokens: extractAnalysisTokens(title, product, keywordHits),
     ruleChecks,
     keywordHits: keywordHits.slice(0, 24),
-    suggestions: recommendations
+    substringHits: substringHits.slice(0, 30),
+    recommendations,
+    suggestions: recommendations.map((r) => r.message)
   };
 
   return {
@@ -316,9 +337,12 @@ export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzeP
     bodyBytes: candidate.bodyBytes,
     totalBytes: candidate.totalBytes,
     score,
+    scoreBreakdown: breakdown,
     grade,
     candidate,
     recommendations,
+    substringHits: substringHits.slice(0, 30),
+    suggestedTitles: uniqueSuggested,
     endingAdvice,
     warnings: data.warnings,
     diagnostics
@@ -332,13 +356,20 @@ export function scoreTitleCandidate(title: string, data: TitleKeywordData, produ
   const entries = context?.scoreEntries ?? collectScoreEntries(data, product, undefined, undefined);
   const hits = detectKeywordHits(title, data, entries);
   const ruleChecks = evaluateTitleRules(title, product);
-  const ruleScore = ruleChecks.every((rule) => !rule.required || rule.passed) ? 220 : -300;
-  const hitScore = hits.slice(0, 30).reduce((sum, hit) => sum + hit.weight * (hit.matchType === "exact" ? 1 : hit.matchType === "ordered" ? 0.7 : 0.35), 0);
-  const overlapScore = calcOverlapScore(title, entries, context);
+  const ruleScore = ruleChecks.every((rule) => !rule.required || rule.passed) ? 150 : -400;
+  const idx = context?.keywordIndex ?? buildKeywordIndex(data);
+  const subHits = scanSubstringHits(title, idx);
+  const stackingValue = subHits.reduce((sum, h) => sum + h.value, 0);
+  const hitScore = hits.slice(0, 30).reduce((sum, hit) => sum + hit.weight * (hit.matchType === "exact" ? 1 : hit.matchType === "ordered" ? 0.5 : 0.2), 0);
   const readabilityScore = scoreReadability(title);
-  const byteScore = getGBKByteLength(stripPrefix(title)) === TITLE_BODY_TARGET_BYTES ? 160 : -260;
+  const bodyBytesNow = getGBKByteLength(stripPrefix(title));
+  const byteScore = bodyBytesNow === TITLE_BODY_TARGET_BYTES
+    ? 200
+    : bodyBytesNow > TITLE_BODY_TARGET_BYTES
+      ? Math.max(-400, 160 - (bodyBytesNow - TITLE_BODY_TARGET_BYTES) * 50)
+      : Math.max(-200, 160 - (TITLE_BODY_TARGET_BYTES - bodyBytesNow) * 30);
   const endingScore = titleEndingScore(title, product);
-  const score = Math.round(ruleScore + hitScore + overlapScore + readabilityScore + byteScore + endingScore);
+  const score = Math.round(ruleScore + stackingValue * 2 + hitScore + readabilityScore + byteScore + endingScore);
   context?.scoreCache.set(cacheKey, score);
   return score;
 }
@@ -350,12 +381,14 @@ function createGenerationContext(
   requestedCategory: string | undefined,
   diagnostics: TitleGenerationDiagnostics
 ): GenerationContext {
+  const scoreEntries = collectScoreEntries(data, product, selectedCategory, requestedCategory);
   return {
     data,
     product,
     selectedCategory,
     requestedCategory,
-    scoreEntries: collectScoreEntries(data, product, selectedCategory, requestedCategory),
+    scoreEntries,
+    keywordIndex: buildKeywordIndex(data),
     tokenValueCache: new Map(),
     scoreCache: new Map(),
     exactFitCount: 0,
@@ -413,7 +446,7 @@ function selectRelevantCategories(data: TitleKeywordData, product: TitleProductP
     .map((item) => item.category);
 }
 
-function buildTokenPool(context: GenerationContext): TokenPoolResult {
+function buildTokenPool(context: GenerationContext, extraKeywords?: string[]): TokenPoolResult {
   const { product, selectedCategory, requestedCategory } = context;
   const options: TokenOption[] = [];
   const push = (text: string, weight: number, source: TokenSource, required = false) => {
@@ -459,6 +492,11 @@ function buildTokenPool(context: GenerationContext): TokenPoolResult {
   for (const word of GENERIC_FILLERS) push(word, 55 + productFitBonus(word, product), "filler");
   for (const word of SHORT_FILLERS) push(word, 48 + productFitBonus(word, product), "filler");
 
+  const extras = (extraKeywords ?? [])
+    .map((word) => sanitizeTitleKeyword(word))
+    .filter((word) => word.length >= 2 && word.length <= 8 && !containsThirdPartyBrand(word));
+  for (const word of extras) push(word, 240 + productFitBonus(word, product), "supplement");
+
   const weighted = dedupeTokens(options)
     .map((token) => ({ ...token, weight: token.weight + productFitBonus(token.text, product) + byteEfficiencyBonus(token.text) }))
     .sort((a, b) => Number(Boolean(b.required)) - Number(Boolean(a.required)) || b.weight - a.weight);
@@ -467,6 +505,16 @@ function buildTokenPool(context: GenerationContext): TokenPoolResult {
     rawSize: weighted.length,
     options: compressTokenPool(weighted, context)
   };
+}
+
+export function previewTokenPool(data: TitleKeywordData, productName: string, categoryName?: string): Array<{ text: string; weight: number; source: string }> {
+  if (!productName.trim()) return [];
+  const product = parseTitleProduct(productName);
+  const category = selectCategory(data, product, categoryName);
+  const diagnostics: TitleGenerationDiagnostics = { poolSize: 0, recalledSize: 0, generatedCount: 0, elapsedMs: 0, exactFitCount: 0 };
+  const context = createGenerationContext(data, product, category?.name, categoryName, diagnostics);
+  const poolResult = buildTokenPool(context);
+  return poolResult.options.map((token) => ({ text: token.text, weight: Math.round(token.weight), source: token.source }));
 }
 
 function compressTokenPool(tokens: TokenOption[], context: GenerationContext) {
@@ -539,8 +587,8 @@ function createSeedOrders(product: TitleProductProfile, pool: TokenOption[]) {
     product.normalizedName.includes("百叶317") ? "速干" : "",
     product.category === "long-pants" || product.category === "pants" ? "裤子男款" : "",
     product.category === "shorts" ? "裤子男款" : "",
-    product.season === "夏季" ? "薄款" : "",
-    product.season === "夏季" ? "凉感" : "",
+    product.season && product.season.includes("夏") ? "薄款" : "",
+    product.season && product.season.includes("夏") ? "凉感" : "",
     "直筒裤",
     product.category === "long-pants" ? "休闲裤" : "",
     product.category === "long-pants" ? "卫裤" : ""
@@ -631,7 +679,7 @@ function fillToExactBytes(tokens: string[], required: string[], pool: TokenOptio
   const baseTokens = normalizeTokenList(tokens, context.product);
   const baseBody = baseTokens.join("");
   const baseBytes = getGBKByteLength(baseBody);
-  if (baseBytes === TITLE_BODY_TARGET_BYTES) return { tokens: baseTokens, body: baseBody };
+  if (baseBytes >= TITLE_BODY_TARGET_BYTES - 4 && baseBytes <= TITLE_BODY_TARGET_BYTES) return { tokens: baseTokens, body: baseBody };
   if (baseBytes > TITLE_BODY_TARGET_BYTES) return null;
 
   const additions = buildExactFillAdditions(baseTokens, pool, context)
@@ -658,13 +706,17 @@ function fillToExactBytes(tokens: string[], required: string[], pool: TokenOptio
     }
   }
 
-  const exactStates = dp.get(TITLE_BODY_TARGET_BYTES) ?? [];
-  const best = exactStates
-    .map((state) => ({ state, score: scoreTitleCandidate(TITLE_PREFIX + state.tokens.join(""), context.data, context.product, context) }))
-    .sort((a, b) => b.score - a.score)[0]?.state;
-  if (!best) return null;
-  const body = best.tokens.join("");
-  return { tokens: best.tokens, body };
+  const minAcceptable = TITLE_BODY_TARGET_BYTES - 4;
+  let bestResult: { tokens: string[]; body: string; score: number } | null = null;
+  for (let targetBytes = TITLE_BODY_TARGET_BYTES; targetBytes >= minAcceptable; targetBytes -= 2) {
+    const states = dp.get(targetBytes) ?? [];
+    for (const state of states) {
+      const s = scoreTitleCandidate(TITLE_PREFIX + state.tokens.join(""), context.data, context.product, context);
+      if (!bestResult || s > bestResult.score) bestResult = { tokens: state.tokens, body: state.tokens.join(""), score: s };
+    }
+  }
+  if (!bestResult) return null;
+  return { tokens: bestResult.tokens, body: bestResult.body };
 }
 
 function buildExactFillAdditions(baseTokens: string[], pool: TokenOption[], context: GenerationContext) {
@@ -738,10 +790,11 @@ function toTitleCandidate(
   const title = TITLE_PREFIX + body;
   const bodyBytes = getGBKByteLength(body);
   const totalBytes = getGBKByteLength(title);
-  if (bodyBytes !== TITLE_BODY_TARGET_BYTES || totalBytes !== TITLE_TOTAL_TARGET_BYTES) return null;
+  if (bodyBytes > TITLE_BODY_TARGET_BYTES || bodyBytes < TITLE_BODY_TARGET_BYTES - 4) return null;
   const ruleChecks = evaluateTitleRules(title, product);
   if (ruleChecks.some((rule) => rule.required && !rule.passed)) return null;
   const keywordHits = detectKeywordHits(title, data, context.scoreEntries);
+  const subHits = scanSubstringHits(title, context.keywordIndex);
   const suggestions = buildSuggestions(body, product, keywordHits, selectedCategory);
   return {
     id: `${candidate.mode}-${index}-${Math.abs(hashText(title))}`,
@@ -755,6 +808,8 @@ function toTitleCandidate(
     tokens: candidate.tokens,
     ruleChecks,
     keywordHits: keywordHits.slice(0, 24),
+    substringHits: subHits.slice(0, 30),
+    recommendations: [],
     suggestions
   };
 }
@@ -765,7 +820,10 @@ function evaluateTitleRules(title: string, product: TitleProductProfile): TitleR
   const checks: TitleRuleCheck[] = [];
   const add = (key: string, label: string, passed: boolean, required: boolean, detail: string, missing: string[] = []) => checks.push({ key, label, passed, required, detail, missing });
   add("prefix", "必须以帛先生开头", title.startsWith(TITLE_PREFIX), true, title.startsWith(TITLE_PREFIX) ? "品牌前缀正确" : "缺少帛先生前缀", title.startsWith(TITLE_PREFIX) ? [] : [TITLE_PREFIX]);
-  add("season", "必须包含季节", Boolean(product.season && text.includes(product.season)), true, product.season ? `已识别季节：${product.season}` : "商品名缺少季节", product.season ? [] : ["季节"]);
+  const seasonMatched = product.season
+    ? text.includes(product.season) || SEASON_CHARS.some((ch) => product.season.includes(ch) && text.includes(ch))
+    : false;
+  add("season", "必须包含季节", seasonMatched, true, product.season ? `已识别季节：${product.season}` : "商品名缺少季节", product.season ? [] : ["季节"]);
   const genderPassed = /男士|男款/.test(text);
   add("gender", "必须包含独立男士/男款", genderPassed, true, genderPassed ? "已包含男士或男款" : "缺少男士/男款", genderPassed ? [] : ["男士或男款"]);
   if (product.category === "pants" || product.category === "shorts" || product.category === "long-pants") {
@@ -783,13 +841,17 @@ function evaluateTitleRules(title: string, product: TitleProductProfile): TitleR
     add("baiye-317", "百叶317必须含速干", text.includes("速干"), true, text.includes("速干") ? "已包含速干" : "缺少速干", text.includes("速干") ? [] : ["速干"]);
   }
   if (product.category === "long-pants") {
-    const missing = ["直筒裤", "休闲裤", "卫裤"].filter((word) => !text.includes(word));
-    add("long-pants", "长裤类必须含直筒裤/休闲裤/卫裤", missing.length === 0, true, missing.length ? `缺少：${missing.join("、")}` : "长裤三类目词已分别包含", missing);
+    const longPantsWords = ["直筒裤", "休闲裤", "卫裤"];
+    const missing = longPantsWords.filter((word) => !text.includes(word));
+    const hitCount = longPantsWords.length - missing.length;
+    add("long-pants", "长裤类建议含直筒裤/休闲裤/卫裤（至少2个）", hitCount >= 2, hitCount < 1, missing.length ? `缺少：${missing.join("、")}` : "长裤三类目词已分别包含", missing);
   }
   if (product.category === "shorts") {
     const missing = ["五分裤", "直筒裤"].filter((word) => !text.includes(word));
     add("shorts", "短裤优先包含五分裤/直筒裤", missing.length === 0, false, missing.length ? `建议补充：${missing.join("、")}` : "短裤建议词已包含", missing);
   }
+  const duplicateWords = findDuplicateWords(title);
+  add("no-duplicate", "不能有重复词", duplicateWords.length === 0, false, duplicateWords.length ? `重复词：${duplicateWords.join("、")}` : "未发现重复词", duplicateWords);
   add("body-bytes", "标题主体严格 54 字节", getGBKByteLength(body) === TITLE_BODY_TARGET_BYTES, true, `${getGBKByteLength(body)}/${TITLE_BODY_TARGET_BYTES}`);
   add("total-bytes", "整条标题严格 60 字节", getGBKByteLength(title) === TITLE_TOTAL_TARGET_BYTES, true, `${getGBKByteLength(title)}/${TITLE_TOTAL_TARGET_BYTES}`);
   return checks;
@@ -808,10 +870,10 @@ function detectKeywordHits(title: string, data: TitleKeywordData, entries = data
     else if (coverage(cleanTitle, cleanKeyword) >= 0.55) matchType = "partial";
     if (!matchType) continue;
     const existing = hits.get(keyword);
-    const next: TitleKeywordHit = { keyword, category: entry.category, source: entry.source, weight: entry.weight, matchType };
+    const next: TitleKeywordHit = { keyword, category: entry.category, source: entry.source, weight: entry.weight, compositeValue: calcCompositeKeywordValue(entry), matchType, rank: entry.rank };
     if (!existing || entry.weight > existing.weight) hits.set(keyword, next);
   }
-  return [...hits.values()].sort((a, b) => b.weight - a.weight);
+  return [...hits.values()].sort((a, b) => b.compositeValue - a.compositeValue);
 }
 
 function keywordFitsProduct(keyword: string, product: TitleProductProfile) {
@@ -841,8 +903,6 @@ function requiredWordsForProduct(product: TitleProductProfile): string[] {
   if (product.normalizedName.includes("百叶317")) required.add("速干");
   if (product.category === "long-pants") {
     required.add("直筒裤");
-    required.add("休闲裤子");
-    required.add("卫裤");
   }
   return [...required];
 }
@@ -851,6 +911,9 @@ function lockedWordsForProduct(product: TitleProductProfile): string[] {
   const locked = new Set(requiredWordsForProduct(product));
   if (product.category === "shorts") {
     locked.add("五分裤");
+    locked.add("直筒裤");
+  }
+  if (product.category === "long-pants") {
     locked.add("直筒裤");
   }
   return [...locked];
@@ -863,11 +926,15 @@ function priorityWordsForProduct(product: TitleProductProfile): string[] {
     priority.add("直筒裤");
     priority.add("短裤");
   }
-  if (product.season === "夏季") {
+  if (product.season && product.season.includes("夏")) {
     priority.add("薄款");
     priority.add("凉感");
   }
-  if (product.category === "long-pants") priority.add("裤子男款");
+  if (product.category === "long-pants") {
+    priority.add("裤子男款");
+    priority.add("休闲裤");
+    priority.add("卫裤");
+  }
   for (const word of product.features) priority.add(word);
   return [...priority];
 }
@@ -1000,12 +1067,16 @@ function scoreReadability(title: string) {
   if (/(男士男款|男款男士)/.test(title)) score -= 12;
   if (/(裤子裤|裤裤)/.test(title)) score -= 10;
   if (/(棉麻.*冰丝|冰丝.*棉麻)/.test(title)) score -= 8;
+  const duplicates = findDuplicateWords(title);
+  score -= duplicates.length * 25;
   return score;
 }
 
 function buildSuggestions(body: string, product: TitleProductProfile, hits: TitleKeywordHit[], selectedCategory?: string) {
+  const bodyBytes = getGBKByteLength(body);
+  const totalBytes = getGBKByteLength(TITLE_PREFIX + body);
   const suggestions = [
-    `主体 ${getGBKByteLength(body)}/54 字节，整条标题 ${getGBKByteLength(TITLE_PREFIX + body)}/60 字节。`,
+    `主体 ${bodyBytes}/54 字节，整条标题 ${totalBytes}/60 字节${bodyBytes === TITLE_BODY_TARGET_BYTES ? "（已满）" : bodyBytes >= TITLE_BODY_TARGET_BYTES - 4 ? "（接近满）" : ""}。`,
     `关键词命中 ${hits.length} 个${selectedCategory ? `，优先类目：${selectedCategory}` : ""}。`
   ];
   if (product.category === "shorts" && !body.includes("五分裤")) suggestions.push("短裤标题建议保留五分裤提高精准搜索覆盖。");
@@ -1013,28 +1084,189 @@ function buildSuggestions(body: string, product: TitleProductProfile, hits: Titl
   return suggestions;
 }
 
-function buildAnalysisRecommendations(title: string, product: TitleProductProfile, checks: TitleRuleCheck[], hits: TitleKeywordHit[], selectedCategory?: string) {
-  const recommendations: string[] = [];
+function buildAnalysisRecommendations(title: string, product: TitleProductProfile, checks: TitleRuleCheck[], hits: TitleKeywordHit[], selectedCategory: string | undefined, context: GenerationContext): TitleRecommendation[] {
+  const recommendations: TitleRecommendation[] = [];
+  const cleanTitle = normalizeTitleText(title);
   const missingRequired = checks.filter((rule) => rule.required && !rule.passed);
-  const body = stripPrefix(title);
+
   if (missingRequired.length) {
-    recommendations.push(`硬规则未通过：${missingRequired.map((rule) => rule.label).join("、")}。`);
-  } else {
-    recommendations.push("硬规则已通过，可以继续看关键词覆盖和结尾词质量。");
+    for (const rule of missingRequired.slice(0, 3)) {
+      recommendations.push({
+        type: "missing-element",
+        message: `缺少必要元素：${rule.label}`,
+        detail: rule.detail,
+        estimatedGain: 8
+      });
+    }
+    return recommendations;
   }
-  if (getGBKByteLength(body) < TITLE_BODY_TARGET_BYTES) {
-    recommendations.push(`主体还差 ${TITLE_BODY_TARGET_BYTES - getGBKByteLength(body)} 字节，可补高价值短词或蓝海词。`);
-  } else if (getGBKByteLength(body) > TITLE_BODY_TARGET_BYTES) {
-    recommendations.push(`主体超出 ${getGBKByteLength(body) - TITLE_BODY_TARGET_BYTES} 字节，优先删低命中修饰词。`);
+
+  const bodyBytes = getGBKByteLength(stripPrefix(title));
+  if (bodyBytes > TITLE_BODY_TARGET_BYTES) {
+    recommendations.push({
+      type: "byte-tip",
+      message: `标题超出 ${bodyBytes - TITLE_BODY_TARGET_BYTES} 字节（当前 ${bodyBytes}/${TITLE_BODY_TARGET_BYTES}），需要缩短`,
+      detail: "超出字节会被淘宝截断，影响搜索展示",
+      estimatedGain: 8
+    });
+  } else if (TITLE_BODY_TARGET_BYTES - bodyBytes >= 6) {
+    recommendations.push({
+      type: "byte-tip",
+      message: `还有 ${TITLE_BODY_TARGET_BYTES - bodyBytes} 字节空间可用，建议添加更多关键词`,
+      detail: "充分利用标题字节可以覆盖更多搜索词",
+      estimatedGain: 4
+    });
   }
-  if (!hits.length) {
-    recommendations.push("当前标题未命中关键词库，建议先确认 Excel 类目或补充更明确的商品信息。");
-  } else {
-    recommendations.push(`命中关键词 ${hits.length} 个${selectedCategory ? `，当前参考类目：${selectedCategory}` : ""}。`);
+
+  const hitKeywords = new Set(hits.map((h) => normalizeTitleText(h.keyword)));
+  const unhitHighValue = context.scoreEntries
+    .filter((e) => !hitKeywords.has(normalizeTitleText(e.keyword)))
+    .filter((e) => keywordFitsProduct(e.keyword, product))
+    .filter((e) => !containsThirdPartyBrand(e.keyword))
+    .map((e) => ({ entry: e, value: calcCompositeKeywordValue(e) }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 12);
+
+  const unhitTop5 = unhitHighValue.filter((item) => item.entry.source !== "blue-ocean").slice(0, 5);
+  if (unhitTop5.length > 0) {
+    const list = unhitTop5.map((item) => `「${item.entry.keyword}」(权重${Math.round(item.entry.weight)})`).join("、");
+    recommendations.push({
+      type: "unhit-keyword",
+      message: `推荐高排名关键词：${list}`,
+      detail: `来自${unhitTop5[0].entry.category}等类目`,
+      estimatedGain: Math.min(8, Math.round(unhitTop5[0].value / 5))
+    });
   }
-  const endingAdvice = buildEndingAdvice(title, product);
-  if (endingAdvice) recommendations.push(endingAdvice);
-  return recommendations.slice(0, 6);
+
+  for (const { entry } of unhitHighValue.slice(0, 5)) {
+    const cleanKw = normalizeTitleText(entry.keyword);
+    const overlap = longestCommonSubstring(cleanTitle, cleanKw);
+    const missing = cleanKw.length - overlap;
+
+    if (overlap >= 2 && missing <= 4) {
+      const missingPart = findMissingPart(cleanTitle, cleanKw);
+      if (missingPart) {
+        recommendations.push({
+          type: "insert",
+          message: `插入「${missingPart}」可命中「${entry.keyword}」`,
+          detail: entry.rank ? `排名 ${entry.rank}，${entry.category}` : entry.category,
+          estimatedGain: Math.min(8, Math.round(calcCompositeKeywordValue(entry) / 5))
+        });
+      }
+    }
+  }
+
+  for (const { entry } of unhitHighValue.slice(0, 8)) {
+    const cleanKw = normalizeTitleText(entry.keyword);
+    const chars = [...cleanKw];
+    const allInTitle = chars.every((c) => cleanTitle.includes(c));
+    if (allInTitle && !cleanTitle.includes(cleanKw) && chars.length >= 3 && chars.length <= 7) {
+      recommendations.push({
+        type: "reorder",
+        message: `调整词序可命中「${entry.keyword}」`,
+        detail: `标题已包含所有字符但顺序不对，${entry.rank ? `排名 ${entry.rank}` : entry.category}`,
+        estimatedGain: Math.min(6, Math.round(calcCompositeKeywordValue(entry) / 6))
+      });
+      break;
+    }
+  }
+
+  const duplicateWords = findDuplicateWords(title);
+  if (duplicateWords.length > 0) {
+    recommendations.push({
+      type: "duplicate",
+      message: `标题中存在重复词：${duplicateWords.join("、")}`,
+      detail: "重复词浪费宝贵字节且不增加搜索权重，建议去除重复并填入新关键词",
+      estimatedGain: Math.min(8, duplicateWords.length * 3)
+    });
+  }
+
+  const blueOceanEntries = context.scoreEntries.filter((e) => e.source === "blue-ocean");
+  const unusedBlue = blueOceanEntries
+    .filter((e) => !cleanTitle.includes(normalizeTitleText(e.keyword)))
+    .filter((e) => !containsThirdPartyBrand(e.keyword))
+    .sort((a, b) => {
+      const demandA = Number(a.metrics?.demandSupplyRatio) || 0;
+      const demandB = Number(b.metrics?.demandSupplyRatio) || 0;
+      return demandB - demandA;
+    })
+    .slice(0, 3);
+  if (unusedBlue.length > 0) {
+    const list = unusedBlue.map((e) => `「${e.keyword}」(供需比${Math.round(Number(e.metrics?.demandSupplyRatio) || 0)})`).join("、");
+    recommendations.push({
+      type: "blue-ocean",
+      message: `推荐蓝海词：${list}`,
+      detail: "低竞争高需求词，有助于差异化引流",
+      estimatedGain: 5
+    });
+  }
+
+  const roots = extractHighFreqRoots(context.scoreEntries.slice(0, 50));
+  const unusedRoots = roots.filter((r) => !cleanTitle.includes(r)).slice(0, 5);
+  if (unusedRoots.length > 0) {
+    recommendations.push({
+      type: "root-hint",
+      message: `高频词根未使用：${unusedRoots.join("、")}`,
+      detail: "这些词根在多个高排名关键词中反复出现",
+      estimatedGain: 3
+    });
+  }
+
+  if (!product.season || !cleanTitle.includes(product.season)) {
+    recommendations.push({ type: "missing-element", message: "建议补充季节词", detail: "如「夏季」「春秋」等，提高季节搜索覆盖", estimatedGain: 3 });
+  }
+  if (!product.materials.length || !product.materials.some((m) => cleanTitle.includes(m))) {
+    recommendations.push({ type: "missing-element", message: "建议补充面料词", detail: "如「棉麻」「冰丝」「亚麻」等", estimatedGain: 3 });
+  }
+  if (!/直筒|阔腿|束脚|宽松|修身|弯刀/.test(cleanTitle)) {
+    recommendations.push({ type: "missing-element", message: "建议补充版型词", detail: "如「直筒」「宽松」「阔腿」等", estimatedGain: 3 });
+  }
+
+  return recommendations
+    .filter((r, i, arr) => arr.findIndex((x) => x.message === r.message) === i)
+    .sort((a, b) => b.estimatedGain - a.estimatedGain)
+    .slice(0, 10);
+}
+
+function extractHighFreqRoots(keywords: TitleKeywordEntry[]): string[] {
+  const counts = new Map<string, number>();
+  for (const kw of keywords) {
+    const clean = sanitizeTitleKeyword(kw.keyword);
+    for (let len = 2; len <= 3; len++) {
+      for (let i = 0; i <= clean.length - len; i++) {
+        const root = clean.slice(i, i + len);
+        if (/^[\d\s]+$/.test(root)) continue;
+        counts.set(root, (counts.get(root) || 0) + 1);
+      }
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, c]) => c >= 3)
+    .sort((a, b) => b[1] - a[1])
+    .map(([r]) => r)
+    .slice(0, 20);
+}
+
+function longestCommonSubstring(a: string, b: string): number {
+  let max = 0;
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < b.length; j++) {
+      let len = 0;
+      while (i + len < a.length && j + len < b.length && a[i + len] === b[j + len]) len++;
+      if (len > max) max = len;
+    }
+  }
+  return max;
+}
+
+function findMissingPart(title: string, keyword: string): string | null {
+  for (let i = 0; i < keyword.length; i++) {
+    const prefix = keyword.slice(0, i);
+    const suffix = keyword.slice(i);
+    if (prefix && title.includes(prefix) && !title.includes(keyword)) return suffix;
+    if (suffix && title.includes(suffix) && !title.includes(keyword)) return prefix;
+  }
+  return null;
 }
 
 function extractAnalysisTokens(title: string, product: TitleProductProfile, hits: TitleKeywordHit[]) {
@@ -1046,19 +1278,36 @@ function extractAnalysisTokens(title: string, product: TitleProductProfile, hits
   ]).slice(0, 18);
 }
 
-function scoreAnalyzedTitle(title: string, product: TitleProductProfile, checks: TitleRuleCheck[], hits: TitleKeywordHit[], context: GenerationContext) {
+function scoreAnalyzedTitle(title: string, product: TitleProductProfile, checks: TitleRuleCheck[], hits: TitleKeywordHit[], context: GenerationContext): { score: number; breakdown: TitleScoreBreakdown } {
   const requiredChecks = checks.filter((rule) => rule.required);
   const requiredPassed = requiredChecks.filter((rule) => rule.passed).length;
-  const ruleScore = requiredChecks.length ? (requiredPassed / requiredChecks.length) * 44 : 0;
+  if (requiredPassed < requiredChecks.length) {
+    const raw = Math.max(0, Math.min(15, Math.round((requiredPassed / requiredChecks.length) * 15)));
+    return { score: raw, breakdown: { keywordScore: 0, byteScore: 0, blueOceanScore: 0 } };
+  }
+
+  const hitWeightSum = hits.reduce((sum, h) => sum + h.weight * (h.matchType === "exact" ? 1 : h.matchType === "ordered" ? 0.5 : 0.2), 0);
+  const top10Sum = context.scoreEntries.slice(0, 10).reduce((sum, e) => sum + e.weight, 0);
+  const keywordScore = Math.min(100, top10Sum > 0 ? (hitWeightSum / top10Sum) * 100 : 0);
+
   const bodyBytes = getGBKByteLength(stripPrefix(title));
-  const totalBytes = getGBKByteLength(title);
-  const byteScore = bodyBytes === TITLE_BODY_TARGET_BYTES && totalBytes === TITLE_TOTAL_TARGET_BYTES
-    ? 24
-    : Math.max(0, 20 - Math.abs(TITLE_BODY_TARGET_BYTES - bodyBytes) * 1.6 - Math.abs(TITLE_TOTAL_TARGET_BYTES - totalBytes) * 0.6);
-  const hitScore = Math.min(22, hits.slice(0, 12).reduce((sum, hit) => sum + (hit.matchType === "exact" ? 2.2 : hit.matchType === "ordered" ? 1.5 : 0.8), 0));
-  const overlapScore = Math.min(6, calcOverlapScore(title, context.scoreEntries, context) / 18);
-  const endingScore = titleEndingScore(title, product) > 0 ? 4 : 0;
-  return Math.max(0, Math.min(100, Math.round(ruleScore + byteScore + hitScore + overlapScore + endingScore)));
+  const byteScore = bodyBytes > TITLE_BODY_TARGET_BYTES
+    ? Math.max(0, 50 - (bodyBytes - TITLE_BODY_TARGET_BYTES) * 5)
+    : (bodyBytes / TITLE_BODY_TARGET_BYTES) * 100;
+
+  const blueOceanEntries = context.scoreEntries.filter((e) => e.source === "blue-ocean");
+  const blueHitCount = blueOceanEntries.filter((e) => normalizeTitleText(title).includes(normalizeTitleText(e.keyword))).length;
+  const blueOceanScore = blueOceanEntries.length === 0 ? 50 : Math.min(100, blueHitCount * 50);
+
+  const total = Math.round(keywordScore * 0.6 + byteScore * 0.2 + blueOceanScore * 0.2);
+  return {
+    score: Math.max(0, Math.min(100, total)),
+    breakdown: {
+      keywordScore: Math.round(keywordScore),
+      byteScore: Math.round(byteScore),
+      blueOceanScore: Math.round(blueOceanScore)
+    }
+  };
 }
 
 function titleGrade(score: number, checks: TitleRuleCheck[]): TitleAnalysisResult["grade"] {
@@ -1243,6 +1492,114 @@ function hashText(value: string) {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) hash = (hash << 5) - hash + value.charCodeAt(index);
   return hash | 0;
+}
+
+function buildKeywordIndex(data: TitleKeywordData): Map<string, TitleKeywordEntry> {
+  const index = new Map<string, TitleKeywordEntry>();
+  for (const category of data.categories) {
+    for (const entry of [...category.keywords, ...category.blueOceanWords]) {
+      const key = normalizeTitleText(entry.keyword);
+      if (key.length < 2) continue;
+      const existing = index.get(key);
+      if (!existing || calcCompositeKeywordValue(entry) > calcCompositeKeywordValue(existing)) {
+        index.set(key, entry);
+      }
+    }
+  }
+  return index;
+}
+
+function calcCompositeKeywordValue(entry: TitleKeywordEntry): number {
+  if (entry.source === "blue-ocean" && entry.metrics) {
+    const pop = Number(entry.metrics.popularity) || 1;
+    const conv = Number(entry.metrics.conversionRate) || 5;
+    const demand = Number(entry.metrics.demandSupplyRatio) || 1;
+    return Math.log10(Math.max(1, pop)) * conv * Math.log10(Math.max(2, demand)) * 0.5;
+  }
+  const rank = entry.rank ?? 500;
+  return Math.max(1, 100 / Math.log2(rank + 2));
+}
+
+function scanSubstringHits(title: string, keywordIndex: Map<string, TitleKeywordEntry>): SubstringHit[] {
+  const clean = normalizeTitleText(title);
+  const hits: SubstringHit[] = [];
+  for (let start = 0; start < clean.length; start++) {
+    for (let len = 2; len <= Math.min(20, clean.length - start); len++) {
+      const sub = clean.slice(start, start + len);
+      const entry = keywordIndex.get(sub);
+      if (entry && !containsThirdPartyBrand(entry.keyword)) {
+        hits.push({
+          keyword: entry.keyword,
+          category: entry.category,
+          source: entry.source,
+          start,
+          length: len,
+          value: calcCompositeKeywordValue(entry),
+          rank: entry.rank
+        });
+      }
+    }
+  }
+  return hits.sort((a, b) => b.value - a.value);
+}
+
+function calcStackingScore(hits: SubstringHit[]): number {
+  if (!hits.length) return 0;
+  const uniqueKeywords = new Set(hits.map((h) => h.keyword));
+  const totalValue = hits.reduce((sum, h) => sum + h.value, 0);
+  const countBonus = Math.min(20, uniqueKeywords.size * 2.5);
+  return totalValue + countBonus;
+}
+
+function calcDiversityScore(hits: SubstringHit[]): number {
+  const roots = new Set<string>();
+  for (const hit of hits) {
+    const clean = normalizeTitleText(hit.keyword);
+    if (clean.length >= 2) roots.add(clean.slice(0, 2));
+  }
+  return Math.min(20, roots.size * 4);
+}
+
+function calcStructureScore(title: string, product: TitleProductProfile): number {
+  const text = normalizeTitleText(title);
+  let score = 0;
+  if (product.season && text.includes(product.season)) score += 3;
+  if (product.materials.some((m) => text.includes(m))) score += 3;
+  if (/直筒|阔腿|束脚|宽松|修身|弯刀/.test(text)) score += 3;
+  const body = stripPrefix(title);
+  if (preferredEndingWordsForProduct(product).some((w) => body.endsWith(w))) score += 3;
+  if (!/(束脚.*阔腿|阔腿.*束脚|短裤.*长裤|长裤.*短裤|男士男款|男款男士)/.test(text)) score += 3;
+  return score;
+}
+
+function estimateMaxStackingScore(context: GenerationContext): number {
+  const topEntries = context.scoreEntries
+    .map((e) => calcCompositeKeywordValue(e))
+    .sort((a, b) => b - a)
+    .slice(0, 15);
+  const rawMax = topEntries.reduce((sum, v) => sum + v, 0) + 40;
+  return Math.max(100, rawMax);
+}
+
+function findDuplicateWords(title: string): string[] {
+  const clean = normalizeTitleText(title);
+  const duplicates: string[] = [];
+  const seen = new Set<string>();
+  for (let len = 2; len <= Math.min(6, clean.length); len++) {
+    for (let i = 0; i <= clean.length - len; i++) {
+      const word = clean.slice(i, i + len);
+      if (/^\d+$/.test(word)) continue;
+      if (seen.has(word)) continue;
+      const first = clean.indexOf(word);
+      const second = clean.indexOf(word, first + 1);
+      if (second >= 0 && second >= first + len) {
+        const alreadyCovered = duplicates.some((d) => d.includes(word) || word.includes(d));
+        if (!alreadyCovered) duplicates.push(word);
+        seen.add(word);
+      }
+    }
+  }
+  return duplicates;
 }
 
 function remember<K, V>(map: Map<K, V>, key: K, value: V) {

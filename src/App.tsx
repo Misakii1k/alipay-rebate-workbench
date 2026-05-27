@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -6,6 +6,7 @@ import {
   Download,
   Eraser,
   Eye,
+  EyeOff,
   Film,
   FileSpreadsheet,
   KeyRound,
@@ -14,7 +15,6 @@ import {
   MessageSquareText,
   Minus,
   Moon,
-  PackageCheck,
   Play,
   Plus,
   Settings,
@@ -36,7 +36,6 @@ import {
   ApiProfile,
   AppSettings,
   DEFAULT_SETTINGS,
-  LocalOcrStatus,
   ModelConnectionStatus,
   RebateRow,
   RebateViewKey,
@@ -51,22 +50,25 @@ import {
 } from "./lib/shared";
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
-const APP_VERSION = "0.6.2";
+type FeatureMaturity = "M1" | "M2" | "M3";
+
+const APP_VERSION = "0.9.3";
 const MAKER_CREDIT = "由 Misaki（丛宇航）使用 CodeX 制作";
 const CHANGELOG_ITEMS = [
-  "剪切板自动读取后直接触发识别，无需再手动点击识别按钮。",
-  "开启自动读取 + 自动跳转后，实现全自动 复制→识别→填入→跳转 工作流。",
-  "识别逻辑提取为 ref 回调，避免 setInterval 闭包过期问题。",
+  "对比视图的「推荐」分数也归一化成 0-100 标准分了，不再展示 3328 这种内部原始分。",
+  "对比视图的关键词分布三栏色彩调整：仅原标题用橙、共有用灰、仅推荐用绿，三色一眼可分辨。",
+  "浅色主题下「分差 +X」和「分差 -X」不再是同一种红棕色，正向用翠绿、负向用正红，差异明显。",
+  "对比视图分数加上「/100」单位说明，避免误以为是内部分数。",
 ];
 
-const toolNavItems: Array<{ key: "home" | ToolboxTool; label: string; icon: typeof Upload }> = [
-  { key: "home", label: "工具首页", icon: Sparkles },
-  { key: "rebate", label: "支付宝返款", icon: FileSpreadsheet },
-  { key: "video", label: "视频批量剪辑", icon: Film },
-  { key: "review", label: "收评助手", icon: MessageSquareText },
-  { key: "title", label: "标题词优化", icon: Tags },
-  { key: "compare", label: "评价返款对比", icon: Check },
-  { key: "settings", label: "设置", icon: Settings }
+const toolNavItems: Array<{ key: "home" | ToolboxTool; label: string; icon: typeof Upload; featureMaturity: FeatureMaturity }> = [
+  { key: "home", label: "工具首页", icon: Sparkles, featureMaturity: "M3" },
+  { key: "rebate", label: "支付宝返款", icon: FileSpreadsheet, featureMaturity: "M3" },
+  { key: "video", label: "视频批量剪辑", icon: Film, featureMaturity: "M2" },
+  { key: "review", label: "收评助手", icon: MessageSquareText, featureMaturity: "M2" },
+  { key: "title", label: "标题词优化", icon: Tags, featureMaturity: "M3" },
+  { key: "compare", label: "评价返款对比", icon: Check, featureMaturity: "M3" },
+  { key: "settings", label: "设置", icon: Settings, featureMaturity: "M3" }
 ];
 
 const rebateNavItems: Array<{ key: RebateViewKey; label: string; icon: typeof Upload }> = [
@@ -81,7 +83,6 @@ export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => (localStorage.getItem("app-theme") === "light" ? "light" : "dark"));
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [ocrStatus, setOcrStatus] = useState<LocalOcrStatus>({ state: "not-installed", detail: "正在读取状态" });
   const [modelStatus, setModelStatus] = useState<ModelConnectionStatus>({ state: "unknown", detail: "尚未测试大模型连接" });
   const [amountInput, setAmountInput] = useState("");
   const [remarkInput, setRemarkInput] = useState("");
@@ -94,7 +95,7 @@ export default function App() {
   const [lastResult, setLastResult] = useState<RecognitionResult | null>(null);
   const [toast, setToast] = useState("");
   const [videoState, setVideoState] = useState<VideoWorkbenchState | null>(null);
-  const [changelogOpen, setChangelogOpen] = useState(false);
+  const [maturityInfoOpen, setMaturityInfoOpen] = useState(false);
   const lastClipboardSignature = useRef("");
   const autoRecognizingRef = useRef(false);
 
@@ -122,10 +123,8 @@ export default function App() {
     window.alipayWorkbench.loadSettings().then((loaded) => {
       const normalized = normalizeSettings(loaded);
       setSettings(normalized);
-      setChangelogOpen(normalized.lastSeenChangelogVersion !== APP_VERSION);
       setSettingsLoaded(true);
     });
-    window.alipayWorkbench.getLocalOcrStatus().then(setOcrStatus);
     window.alipayWorkbench.loadWorkbenchState().then((state) => {
       setAmountInput(state.amountInput);
       setRemarkInput(state.remarkInput);
@@ -194,14 +193,35 @@ export default function App() {
     showToast("设置已保存。");
   }
 
-  async function closeChangelog() {
-    setChangelogOpen(false);
-    const saved = await window.alipayWorkbench.saveSettings(normalizeSettings({ ...settings, lastSeenChangelogVersion: APP_VERSION }));
-    setSettings(saved);
-  }
-
   function openTool(key: "home" | ToolboxTool) {
     setView(key === "rebate" ? "import" : key);
+  }
+
+  function toggleTheme(event: React.MouseEvent<HTMLButtonElement>) {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    const doc = document as Document & {
+      startViewTransition?: (callback: () => void) => { ready: Promise<void> };
+    };
+    if (!doc.startViewTransition) {
+      setTheme(nextTheme);
+      return;
+    }
+    const x = event.clientX;
+    const y = event.clientY;
+    const endRadius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    const transition = doc.startViewTransition(() => setTheme(nextTheme));
+    void transition.ready.then(() => {
+      document.documentElement.animate(
+        {
+          clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${endRadius}px at ${x}px ${y}px)`]
+        },
+        {
+          duration: 560,
+          easing: "cubic-bezier(.22, 1, .36, 1)",
+          pseudoElement: "::view-transition-new(root)"
+        }
+      );
+    });
   }
 
   async function readClipboardToImport() {
@@ -393,6 +413,7 @@ export default function App() {
               <button key={item.key} className={clsx("nav-item", activeTool === item.key && "active")} aria-current={activeTool === item.key ? "page" : undefined} onClick={() => openTool(item.key)}>
                 <Icon size={18} />
                 <span>{item.label}</span>
+                <MaturityBadge value={item.featureMaturity} compact onClick={(event) => { event.stopPropagation(); setMaturityInfoOpen(true); }} />
               </button>
             );
           })}
@@ -404,7 +425,7 @@ export default function App() {
             <div className="mini-progress"><i style={{ width: `${sidebarProgress.percent}%` }} /></div>
           </div>
         )}
-        <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+        <button className="theme-toggle" onClick={toggleTheme}>
           {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
           <span>{theme === "dark" ? "浅色模式" : "深色模式"}</span>
         </button>
@@ -415,13 +436,12 @@ export default function App() {
           <header className="topbar">
             <div><p className="eyebrow">{toolEyebrow(activeTool)}</p><h1>{viewTitle(view)}</h1></div>
             <div className="top-actions">
-              <span className={clsx("status-pill", settings.ocrMode)}>OCR：{ocrModeLabel(settings.ocrMode)}</span>
               <span className={clsx("status-pill", "model", modelStatus.state)}><KeyRound size={15} /> 大模型：{modelStatusLabel(modelStatus.state)}</span>
             </div>
           </header>
         )}
 
-        {view === "home" && <ToolboxHome settings={settings} pendingCount={pendingCount} totalAmount={sumRebateAmount(rows.filter(isTodayRebateRow).map((row) => row.amount))} onOpen={setView} />}
+        {view === "home" && <ToolboxHome settings={settings} pendingCount={pendingCount} totalAmount={sumRebateAmount(rows.filter(isTodayRebateRow).map((row) => row.amount))} onOpen={setView} onOpenMaturityInfo={() => setMaturityInfoOpen(true)} />}
 
         {activeTool === "rebate" && (
           <div className="subnav">
@@ -507,7 +527,7 @@ export default function App() {
         {view === "review" && <ReviewAssistant settings={settings} onSaveSettings={saveSettings} showToast={showToast} />}
         {view === "title" && <TitleOptimizer settings={settings} onSaveSettings={saveSettings} showToast={showToast} />}
         {view === "compare" && <CompareWorkbench settings={settings} showToast={showToast} />}
-        {view === "settings" && <SettingsView settings={settings} onSave={saveSettings} ocrStatus={ocrStatus} modelStatus={modelStatus} onTestModel={async (draft) => {
+        {view === "settings" && <SettingsView settings={settings} onSave={saveSettings} modelStatus={modelStatus} onTestModel={async (draft) => {
           setModelStatus({ state: "testing", detail: "正在测试大模型连接" });
           const result = await testModelConnection(draft);
           setModelStatus(result);
@@ -516,8 +536,8 @@ export default function App() {
         }} />}
         <footer className="app-credit">V{APP_VERSION} · 电商运营工具箱 · {MAKER_CREDIT}</footer>
       </main>
+      {maturityInfoOpen && <MaturityInfoDialog onClose={() => setMaturityInfoOpen(false)} />}
       {toast && <div className="toast">{toast}</div>}
-      {changelogOpen && <ChangelogDialog onClose={() => void closeChangelog()} />}
     </div>
   );
 }
@@ -536,27 +556,19 @@ function BrandGlyph({ className, compact = false }: { className: string; compact
   );
 }
 
-function ChangelogDialog({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="changelog-backdrop" role="dialog" aria-modal="true" aria-label="更新日志">
-      <section className="changelog-card">
-        <div className="changelog-mark"><PackageCheck size={22} /></div>
-        <p className="eyebrow">版本 V{APP_VERSION}</p>
-        <h2>本次更新</h2>
-        <div className="changelog-list">
-          {CHANGELOG_ITEMS.map((item) => <span key={item}>{item}</span>)}
-        </div>
-        <button className="primary" onClick={onClose}>知道了</button>
-      </section>
-    </div>
-  );
-}
-
 function Panel({ title, icon: Icon, className, action, children }: { title: string; icon: typeof Upload; className?: string; action?: React.ReactNode; children: React.ReactNode }) {
   return <section className={clsx("panel", className)}><div className="panel-title"><div><Icon size={19} /><h2>{title}</h2></div>{action}</div>{children}</section>;
 }
 
-function ToolboxHome({ settings, pendingCount, totalAmount, onOpen }: { settings: AppSettings; pendingCount: number; totalAmount: number; onOpen: (view: ViewKey) => void }) {
+function ToolboxHome({ settings, pendingCount, totalAmount, onOpen, onOpenMaturityInfo }: { settings: AppSettings; pendingCount: number; totalAmount: number; onOpen: (view: ViewKey) => void; onOpenMaturityInfo: () => void }) {
+  const cards = [
+    { className: "bento-main", icon: FileSpreadsheet, label: "核心工具", title: "支付宝批量返款", text: "导入金额和备注，识别账号姓名，校验后导出支付宝模板。", view: "import" as ViewKey, featureMaturity: "M3" as FeatureMaturity },
+    { className: "bento-video", icon: Film, label: "视频生产", title: "批量剪辑", text: "模板化短视频，支持帛先生和切片模板。", view: "video" as ViewKey, featureMaturity: "M2" as FeatureMaturity },
+    { className: "bento-review", icon: MessageSquareText, label: "评价运营", title: "收评助手", text: "检索参考图并生成买家好评文案。", view: "review" as ViewKey, featureMaturity: "M2" as FeatureMaturity },
+    { className: "bento-title", icon: Tags, label: "关键词算法", title: "标题词优化", text: "分析已有标题评分，辅助生成严格 54 字节标题。", view: "title" as ViewKey, featureMaturity: "M3" as FeatureMaturity },
+    { className: "bento-compare", icon: Check, label: "核对", title: "评价返款对比", text: "自动去重，差异置顶标红。", view: "compare" as ViewKey, featureMaturity: "M3" as FeatureMaturity },
+    { className: "bento-settings", icon: Settings, label: "配置", title: "全局设置", text: "API、路径、规则与纠偏。", view: "settings" as ViewKey, featureMaturity: "M3" as FeatureMaturity }
+  ];
   return (
     <section className="home-dashboard">
       <div className="home-hero">
@@ -565,26 +577,58 @@ function ToolboxHome({ settings, pendingCount, totalAmount, onOpen }: { settings
         <div className="home-metrics"><span className="metric-green"><strong>{formatMoney(totalAmount)}</strong>今日返款总金额</span><span className="metric-gold"><strong>{pendingCount}</strong>待处理笔数</span></div>
       </div>
       <div className="bento-grid">
-        <HomeCard className="bento-main" icon={FileSpreadsheet} label="核心工具" title="支付宝批量返款" text="导入金额和备注，识别账号姓名，校验后导出支付宝模板。" onClick={() => onOpen("import")} />
-        <HomeCard className="bento-video" icon={Film} label="视频生产" title="批量剪辑" text="模板化短视频，支持帛先生和切片模板。" onClick={() => onOpen("video")} />
-        <HomeCard className="bento-review" icon={MessageSquareText} label="评价运营" title="收评助手" text="检索参考图并生成买家好评文案。" onClick={() => onOpen("review")} />
-        <HomeCard className="bento-title" icon={Tags} label="关键词算法" title="标题词优化" text="分析已有标题评分，辅助生成严格 54 字节标题。" onClick={() => onOpen("title")} />
-        <HomeCard className="bento-compare" icon={Check} label="核对" title="评价返款对比" text="自动去重，差异置顶标红。" onClick={() => onOpen("compare")} />
-        <HomeCard className="bento-settings" icon={Settings} label="配置" title="全局设置" text="API、路径、规则与纠偏。" onClick={() => onOpen("settings")} />
+        {cards.map((card) => (
+          <HomeCard
+            key={card.view}
+            {...card}
+            onClick={() => onOpen(card.view)}
+            onOpenMaturityInfo={onOpenMaturityInfo}
+          />
+        ))}
       </div>
     </section>
   );
 }
 
-function HomeCard({ className, icon: Icon, label, title, text, onClick }: { className: string; icon: typeof Upload; label: string; title: string; text: string; onClick: () => void }) {
+function HomeCard({ className, icon: Icon, label, title, text, featureMaturity, onClick, onOpenMaturityInfo }: { className: string; icon: typeof Upload; label: string; title: string; text: string; featureMaturity: FeatureMaturity; onClick: () => void; onOpenMaturityInfo: () => void }) {
   return (
     <button className={clsx("bento-card", className)} onClick={onClick}>
       <div className="bento-card-inner">
         <div className="bento-icon"><Icon size={24} /></div>
+        <MaturityBadge value={featureMaturity} onClick={(event) => { event.stopPropagation(); onOpenMaturityInfo(); }} />
         <div className="bento-body"><p className="bento-label">{label}</p><h2>{title}</h2><span>{text}</span></div>
         <em className="bento-action">进入 <ArrowRight size={16} /></em>
       </div>
     </button>
+  );
+}
+
+function MaturityBadge({ value, compact = false, onClick }: { value: FeatureMaturity; compact?: boolean; onClick: (event: React.MouseEvent<HTMLButtonElement>) => void }) {
+  const label = {
+    M1: "M1 探索",
+    M2: "M2 可用",
+    M3: "M3 稳定"
+  }[value];
+  return <button type="button" className={clsx("maturity-badge", value.toLowerCase(), compact && "compact")} onClick={onClick} title="查看 M 等级说明">{compact ? value : label}</button>;
+}
+
+function MaturityInfoDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="maturity-info-backdrop" role="dialog" aria-modal="true" aria-label="M 等级说明" onMouseDown={onClose}>
+      <div className="maturity-info-card" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <h3>M 等级说明</h3>
+          <button className="maturity-info-close" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+        </header>
+        <p className="maturity-info-intro">M 标签表示功能成熟度，来自每个工具的 featureMaturity 配置，用来快速判断当前模块的稳定程度。</p>
+        <div className="maturity-info-list">
+          <article><strong>M1 探索</strong><p>功能方向已验证，仍可能频繁调整流程或界面。</p></article>
+          <article><strong>M2 可用</strong><p>核心流程可日常使用，但仍会继续补强体验、性能和边界情况。</p></article>
+          <article><strong>M3 稳定</strong><p>主流程稳定，适合作为常用工作台能力长期使用。</p></article>
+        </div>
+        <footer><button className="maturity-info-ok" onClick={onClose}>知道了</button></footer>
+      </div>
+    </div>
   );
 }
 
@@ -609,9 +653,10 @@ function RowsTable({ rows, currentIndex, onPick, onClear }: { rows: RebateRow[];
   );
 }
 
-function SettingsView({ settings, onSave, ocrStatus, modelStatus, onTestModel }: { settings: AppSettings; onSave: (settings: AppSettings) => void; ocrStatus: LocalOcrStatus; modelStatus: ModelConnectionStatus; onTestModel: (settings: AppSettings) => Promise<ModelConnectionStatus> }) {
+function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings: AppSettings; onSave: (settings: AppSettings) => void; modelStatus: ModelConnectionStatus; onTestModel: (settings: AppSettings) => Promise<ModelConnectionStatus> }) {
   const [draft, setDraft] = useState(settings);
   const [section, setSection] = useState<"global" | "rebate" | "video" | "review" | "title" | "compare">("global");
+  const [showApiKey, setShowApiKey] = useState(false);
   useEffect(() => setDraft(settings), [settings]);
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setDraft((prev) => ({ ...prev, [key]: value }));
   const activeProfile = getActiveApiProfile(draft);
@@ -644,10 +689,10 @@ function SettingsView({ settings, onSave, ocrStatus, modelStatus, onTestModel }:
           return <button key={item.key} className={clsx("settings-hub-item", section === item.key && "active")} onClick={() => setSection(item.key)}><Icon size={18} /><strong>{item.label}</strong><span>{item.description}</span></button>;
         })}
       </div>
-      {section === "global" && <section className="settings-grid single"><Panel title="全局设置" icon={Settings}><div className="form-stack"><label><span>工具箱名称</span><input value={draft.toolboxName} onChange={(event) => set("toolboxName", event.target.value)} /></label><FontScalePicker value={draft.fontScale} onChange={(value) => set("fontScale", value)} /><label><span>API Base URL</span><input value={activeProfile.apiBaseUrl} onChange={(event) => setProfile({ apiBaseUrl: event.target.value })} /></label><label><span>API Key</span><input type="password" value={activeProfile.apiKey} onChange={(event) => setProfile({ apiKey: event.target.value })} /></label><label><span>文本模型</span><input value={activeProfile.textModel} onChange={(event) => setProfile({ textModel: event.target.value })} /></label><label><span>视觉模型</span><input value={activeProfile.visionModel} onChange={(event) => setProfile({ visionModel: event.target.value })} /></label><div className={clsx("connection-card", modelStatus.state)}><strong>大模型连接：{modelStatusLabel(modelStatus.state)}</strong><span>{modelStatus.detail}</span></div><button className="secondary-action" onClick={() => void onTestModel(draft)}><KeyRound size={17} /> 测试大模型连接</button><div className="hint-card">OCR 状态：{ocrStatus.detail}</div><div className="hint-card">页面底部会显示：{MAKER_CREDIT}</div></div></Panel></section>}
+      {section === "global" && <section className="settings-grid single"><Panel title="全局设置" icon={Settings}><div className="form-stack"><label><span>工具箱名称</span><input value={draft.toolboxName} onChange={(event) => set("toolboxName", event.target.value)} /></label><FontScalePicker value={draft.fontScale} onChange={(value) => set("fontScale", value)} /><label><span>API Base URL</span><input value={activeProfile.apiBaseUrl} onChange={(event) => setProfile({ apiBaseUrl: event.target.value })} /></label><label><span>API Key</span><div className="secret-input"><input type={showApiKey ? "text" : "password"} value={activeProfile.apiKey} onChange={(event) => setProfile({ apiKey: event.target.value })} /><button type="button" onClick={() => setShowApiKey((value) => !value)} title={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label><label><span>文本模型</span><input value={activeProfile.textModel} onChange={(event) => setProfile({ textModel: event.target.value })} /></label><label><span>视觉模型</span><input value={activeProfile.visionModel} onChange={(event) => setProfile({ visionModel: event.target.value })} /></label><div className={clsx("connection-card", modelStatus.state)}><strong>大模型连接：{modelStatusLabel(modelStatus.state)}</strong><span>{modelStatus.detail}</span></div><button className="secondary-action" onClick={() => void onTestModel(draft)}><KeyRound size={17} /> 测试大模型连接</button><div className="hint-card">页面底部会显示：{MAKER_CREDIT}</div></div></Panel></section>}
       {section === "rebate" && <section className="settings-grid single"><Panel title="支付宝返款设置" icon={FileSpreadsheet}><div className="form-stack"><label><span>导出文件名中的名字</span><input value={draft.exportNameOwner} onChange={(event) => set("exportNameOwner", event.target.value)} /></label><label><span>固定尾行支付宝账号</span><input value={draft.fixedTailAccount} onChange={(event) => set("fixedTailAccount", event.target.value)} /></label><label><span>固定尾行姓名</span><input value={draft.fixedTailName} onChange={(event) => set("fixedTailName", event.target.value)} /></label><Toggle checked={draft.autoListenClipboard} label="录入页自动读取剪切板" onChange={(value) => set("autoListenClipboard", value)} /></div></Panel></section>}
       {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")}>选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")}>选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()}>指定 FFmpeg</button><div className="hint-card">切片音乐默认使用内置 CC0 音乐。{MAKER_CREDIT}</div></div></Panel></section>}
-      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")}>选择图片根目录</button><label><span>云端更新源 URL</span><input value={draft.updateFeedUrl} onChange={(event) => set("updateFeedUrl", event.target.value)} /></label></div></Panel></section>}
+      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")}>选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><Toggle checked={draft.reviewScoringEnabled} label="开启相关性评分系统（关闭可提升搜索性能）" onChange={(value) => set("reviewScoringEnabled", value)} /><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={300} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>思考模式</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])}><option value="off">关闭</option><option value="fast">快速</option><option value="balanced">均衡</option><option value="deep">深度</option></select></label><label><span>思考程度</span><select value={draft.reviewThinkingEffort} onChange={(event) => set("reviewThinkingEffort", event.target.value as AppSettings["reviewThinkingEffort"])}><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label><span>云端更新源 URL</span><input value={draft.updateFeedUrl} onChange={(event) => set("updateFeedUrl", event.target.value)} /></label></div></Panel></section>}
       {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()}><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div><div className="hint-card">{MAKER_CREDIT}</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><button className="primary" onClick={() => onSave(normalizeSettings(draft))}><Check size={18} /> 保存设置</button></div>
@@ -735,10 +780,6 @@ function toolEyebrow(tool: "home" | ToolboxTool) {
   return { home: "工具首页", rebate: "支付宝批量返款", video: "电商视频制作", review: "评价运营", title: "关键词算法", compare: "评价状态核对", settings: "全局配置" }[tool];
 }
 
-function ocrModeLabel(mode: AppSettings["ocrMode"]) {
-  return { cloud: "云端 OCR", local: "本地 OCR", off: "关闭" }[mode];
-}
-
 function statusLabel(status: RebateRow["status"]) {
   return { pending: "待填", done: "完成", failed: "失败", manual: "手动", skipped: "跳过" }[status];
 }
@@ -746,3 +787,4 @@ function statusLabel(status: RebateRow["status"]) {
 function modelStatusLabel(state: ModelConnectionStatus["state"]) {
   return { unknown: "未测试", testing: "测试中", connected: "已连接", failed: "失败" }[state];
 }
+

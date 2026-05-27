@@ -8,6 +8,7 @@ export function CompareWorkbench({ settings, showToast }: { settings: AppSetting
   const [rebatedInput, setRebatedInput] = useState("");
   const [verified, setVerified] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogTab, setDialogTab] = useState<"remind" | "reviewed">("remind");
   const rightListRef = useRef<HTMLDivElement | null>(null);
 
   const reviewedEntries = useMemo(() => parseCompareEntries(reviewedInput), [reviewedInput]);
@@ -121,15 +122,35 @@ export function CompareWorkbench({ settings, showToast }: { settings: AppSetting
         <div className="compare-dialog-backdrop">
           <div className="compare-dialog">
             <button className="dialog-close" type="button" onClick={() => setDialogOpen(false)}><X size={18} /></button>
-            <h2>还未评价，需催促</h2>
-            <p>以下名单来自左侧多出的部分。点击姓名即可复制，方便逐个催促。</p>
-            <div className="copy-name-list">
-              {comparison.leftOnly.length ? comparison.leftOnly.map((entry) => (
-                <button key={`${entry.name}-${entry.source}`} type="button" onClick={() => copyName(entry.name)}>
-                  <ClipboardCopy size={15} /> {entry.name}
-                </button>
-              )) : <div className="empty">没有需要催促的人员。</div>}
+            <div className="compare-dialog-tabs">
+              <button type="button" className={dialogTab === "remind" ? "active" : ""} onClick={() => setDialogTab("remind")}>需催促 ({comparison.leftOnly.length})</button>
+              <button type="button" className={dialogTab === "reviewed" ? "active" : ""} onClick={() => setDialogTab("reviewed")}>已评价 ({comparison.matched.length})</button>
             </div>
+            {dialogTab === "remind" ? (
+              <>
+                <h2>还未评价，需催促</h2>
+                <p>以下名单来自左侧多出的部分。点击姓名即可复制，方便逐个催促。</p>
+                <div className="copy-name-list">
+                  {comparison.leftOnly.length ? comparison.leftOnly.map((entry) => (
+                    <button key={`${entry.name}-${entry.source}`} type="button" onClick={() => copyName(entry.name)}>
+                      <ClipboardCopy size={15} /> {entry.name}
+                    </button>
+                  )) : <div className="empty">没有需要催促的人员。</div>}
+                </div>
+              </>
+            ) : (
+              <>
+                <h2>已评价人员</h2>
+                <p>以下人员已完成评价且已返款，无需操作。点击姓名即可复制。</p>
+                <div className="copy-name-list">
+                  {comparison.matched.length ? comparison.matched.map((entry) => (
+                    <button key={`${entry.name}-${entry.source}`} type="button" onClick={() => copyName(entry.name)}>
+                      <ClipboardCopy size={15} /> {entry.name}
+                    </button>
+                  )) : <div className="empty">没有已评价的人员。</div>}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

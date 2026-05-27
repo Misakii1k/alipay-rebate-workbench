@@ -1,7 +1,32 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Bot, Check, Clipboard, FileJson, FileSpreadsheet, Loader2, RefreshCw, Search, Sparkles, Wand2, X } from "lucide-react";
+import {
+  ArrowLeftRight,
+  Check,
+  ChevronDown,
+  Clipboard,
+  FileJson,
+  FileSpreadsheet,
+  Lightbulb,
+  Loader2,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Wand2,
+  X,
+  TrendingUp,
+  GitCompare,
+  ListChecks,
+  KeyRound
+} from "lucide-react";
 import clsx from "clsx";
-import type { AppSettings, TitleAnalysisResult, TitleCandidate, TitleKeywordData, TitleScoreResult } from "./lib/shared";
+import type {
+  AppSettings,
+  TitleAnalysisResult,
+  TitleCandidate,
+  TitleKeywordData,
+  TitleRecommendation,
+  TitleScoreResult
+} from "./lib/shared";
 
 const DEFAULT_AI_JSON = `{
   "productName": "彩棉317夏季长裤",
@@ -15,17 +40,12 @@ const DEFAULT_AI_JSON = `{
 }`;
 const ANALYSIS_VISIBLE_MS = 2800;
 const FLOW_WORD_POSITIONS = [
-  ["8%", "14%"],
-  ["22%", "78%"],
-  ["34%", "20%"],
-  ["48%", "82%"],
-  ["62%", "18%"],
-  ["76%", "74%"],
-  ["88%", "34%"],
-  ["14%", "50%"],
-  ["72%", "46%"],
-  ["42%", "58%"]
+  ["8%", "14%"], ["22%", "78%"], ["34%", "20%"], ["48%", "82%"],
+  ["62%", "18%"], ["76%", "74%"], ["88%", "34%"], ["14%", "50%"],
+  ["72%", "46%"], ["42%", "58%"]
 ];
+
+type TitleTab = "keywords" | "rules" | "advice";
 
 function waitForVisibleAnalysis(startedAt: number) {
   const remaining = ANALYSIS_VISIBLE_MS - (Date.now() - startedAt);
@@ -53,6 +73,9 @@ export function TitleOptimizer({
   const [generated, setGenerated] = useState<TitleScoreResult | null>(null);
   const [error, setError] = useState("");
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<TitleTab>("keywords");
+  const [compareCandidate, setCompareCandidate] = useState<TitleCandidate | null>(null);
 
   const categories = keywordData?.categories ?? [];
   const selectedCategory = useMemo(
@@ -101,6 +124,7 @@ export function TitleOptimizer({
       });
       await waitForVisibleAnalysis(startedAt);
       setAnalysis(next);
+      setActiveTab("keywords");
       if (!next.ok || next.grade === "blocked") setError(next.message);
     } catch (caught) {
       await waitForVisibleAnalysis(startedAt);
@@ -135,6 +159,29 @@ export function TitleOptimizer({
     }
   };
 
+  const generateCandidates = async () => {
+    const startedAt = Date.now();
+    setGenerating(true);
+    setError("");
+    setGenerated(null);
+    try {
+      const next = await window.alipayWorkbench.generateTitleCandidates(settings, {
+        productName,
+        categoryName: categoryName || undefined,
+        variantCount: 5
+      });
+      await waitForVisibleAnalysis(startedAt);
+      setGenerated(next);
+      if (!next.ok) setError(next.message);
+      showToast(settings.titleAiSelectionEnabled ? "AI 智能选词已参与候选生成。" : "已使用纯算法生成候选。");
+    } catch (caught) {
+      await waitForVisibleAnalysis(startedAt);
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const copyText = async (text: string, message: string) => {
     await window.alipayWorkbench.writeClipboardText(text);
     showToast(message);
@@ -143,172 +190,650 @@ export function TitleOptimizer({
   const aiPrompt = useMemo(() => buildBrowserAiPrompt(productName), [productName]);
 
   return (
-    <section className="title-optimizer">
-      <div className="title-grid">
-        <section className="panel title-input-panel">
-          <div className="panel-title"><Search size={19} /><h2>优化标题分析</h2></div>
-          <div className="form-stack">
-            <label>
-              <span>商品名 / 系列 / 材质 / 季节</span>
-              <input value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="例如：彩棉317夏季长裤" />
-            </label>
-            <label>
-              <span>已有标题</span>
-              <textarea className="title-textarea" value={currentTitle} onChange={(event) => setCurrentTitle(event.target.value)} placeholder="粘贴你自己写好的完整标题，建议包含帛先生前缀。" />
-            </label>
-            <label>
-              <span>优先类目</span>
-              <div className="title-category-picker">
-                <button
-                  type="button"
-                  className={clsx("title-category-trigger", categoryPickerOpen && "open")}
-                  onClick={() => setCategoryPickerOpen((open) => !open)}
-                >
-                  <span>{selectedCategory ? selectedCategory.name : "自动匹配"}</span>
-                  <em>{selectedCategory ? `${selectedCategory.keywordCount}词` : "按商品名匹配"}</em>
-                </button>
-                {categoryPickerOpen && (
-                  <div className="title-category-menu">
-                    <button
-                      type="button"
-                      className={clsx(!categoryName && "active")}
-                      onClick={() => {
-                        setCategoryName("");
-                        setCategoryPickerOpen(false);
-                      }}
-                    >
-                      <strong>自动匹配</strong>
-                      <span>按商品名匹配</span>
-                    </button>
-                    {categories.slice(0, 32).map((category) => (
-                      <button
-                        type="button"
-                        key={category.name}
-                        className={clsx(category.name === categoryName && "active")}
-                        onClick={() => {
-                          setCategoryName(category.name);
-                          setCategoryPickerOpen(false);
-                        }}
-                      >
-                        <strong>{category.name}</strong>
-                        <span>{category.keywordCount}词</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </label>
-            <div className="button-row">
-              <button className="primary" onClick={analyze} disabled={analyzing || loadingData}>
-                {analyzing ? <Loader2 className="spin" size={18} /> : <Search size={18} />} 分析标题并评分
-              </button>
-              <button className="secondary-action light" onClick={() => void loadData()} disabled={loadingData}>
-                {loadingData ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />} 重新读取 Excel
-              </button>
-              <button className="secondary-action light" onClick={() => void pickExcel()}>
-                <FileSpreadsheet size={17} /> 选择 Excel
-              </button>
-            </div>
-          </div>
-          {(error || hasKeywordWarnings) && (
-            <div className={clsx("title-message", error && "danger")}>
-              <strong>{error || "数据提醒"}</strong>
-              {(keywordData?.warnings ?? []).slice(0, 4).map((warning) => <span key={warning}>{warning}</span>)}
-            </div>
-          )}
-        </section>
+    <section className="title-optimizer title-v2">
+      <TitleInputCard
+        productName={productName}
+        setProductName={setProductName}
+        currentTitle={currentTitle}
+        setCurrentTitle={setCurrentTitle}
+        categoryName={categoryName}
+        setCategoryName={setCategoryName}
+        categoryPickerOpen={categoryPickerOpen}
+        setCategoryPickerOpen={setCategoryPickerOpen}
+        categories={categories}
+        selectedCategory={selectedCategory}
+        keywordData={keywordData}
+        analyzing={analyzing}
+        loadingData={loadingData}
+        onAnalyze={() => void analyze()}
+        onReload={() => void loadData()}
+        onPickExcel={() => void pickExcel()}
+        onOpenAi={() => void generateCandidates()}
+        settings={settings}
+        onSaveSettings={onSaveSettings}
+        showToast={showToast}
+      />
 
-        <section className="panel title-ai-panel">
-          <div className="panel-title"><Bot size={19} /><h2>浏览器 AI 辅助</h2></div>
-          <div className="title-path-card">
-            <FileSpreadsheet size={18} />
-            <div>
-              <strong>{keywordData ? `${keywordData.totalKeywords} 个关键词已加载` : "关键词数据未加载"}</strong>
-              <span>{settings.titleKeywordExcelPath}</span>
-            </div>
-          </div>
-          <div className="title-data-stats">
-            <span><strong>{categories.length}</strong>类目</span>
-            {selectedCategory
-              ? <span><strong>{selectedCategory.keywordCount}</strong>当前类目</span>
-              : <span><strong>自动</strong>类目匹配</span>}
-          </div>
-          <label>
-            <span>给浏览器 AI 的提示词</span>
-            <textarea className="small-textarea title-prompt-box" value={aiPrompt} readOnly />
-          </label>
-          <div className="button-row">
-            <button className="secondary-action light" onClick={() => void copyText(aiPrompt, "AI 提示词已复制。")}>
-              <Clipboard size={16} /> 复制提示词
-            </button>
-          </div>
-        </section>
-      </div>
+      {(error || hasKeywordWarnings) && (
+        <div className={clsx("title-v2-message", error && "danger")}>
+          <strong>{error || "数据提醒"}</strong>
+          {(keywordData?.warnings ?? []).slice(0, 4).map((warning) => <span key={warning}>{warning}</span>)}
+        </div>
+      )}
 
       {(analyzing || generating) && <TitleAnalyzeAnimation label={analyzing ? "正在分析标题" : "正在生成候选"} />}
 
-      {analysis && (
-        <section className="panel title-results">
-          <div className="title-result-head">
-            <div>
-              <p className="eyebrow">标题评分 / 规则检查 / 关键词命中</p>
-              <h2>标题分析结果</h2>
-            </div>
-            <span className={clsx("title-result-state", analysis.grade === "blocked" ? "danger" : "ok")}>{gradeLabel(analysis.grade)} · {analysis.score} 分</span>
+      {analysis && !compareCandidate && (
+        <TitleScorePanel
+          analysis={analysis}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          onCopy={(text, msg) => void copyText(text, msg)}
+          onCompare={(candidate) => setCompareCandidate(candidate)}
+        />
+      )}
+
+      {compareCandidate && analysis && (
+        <TitleCompareView
+          original={analysis}
+          candidate={compareCandidate}
+          onExit={() => setCompareCandidate(null)}
+          onCopy={(text, msg) => void copyText(text, msg)}
+        />
+      )}
+
+      {generated && generated.candidates.length > 0 && (
+        <section className="title-v2-candidates">
+          <div className="title-v2-section-head">
+            <Sparkles size={16} />
+            <h3>AI 生成的候选标题</h3>
+            <span>{generated.candidates.length} 个</span>
           </div>
-          {analysis.diagnostics && (
-            <div className="title-diagnostics">
-              <span>原始词池 <strong>{analysis.diagnostics.poolSize}</strong></span>
-              <span>召回词池 <strong>{analysis.diagnostics.recalledSize}</strong></span>
-              <span>耗时 <strong>{analysis.diagnostics.elapsedMs}ms</strong></span>
-            </div>
-          )}
-          <div className="title-analysis-strip">
-            <div className="title-score-card">
-              <span>综合评分</span>
-              <strong>{analysis.score}</strong>
-              <em>{analysis.message}</em>
-            </div>
-            <div className="title-check-panel">
-              <TitleMetric label="主体" value={`${analysis.bodyBytes}/54`} ok={analysis.bodyBytes === 54} />
-              <TitleMetric label="整条" value={`${analysis.totalBytes}/60`} ok={analysis.totalBytes === 60} />
-              <TitleMetric label="命中" value={`${analysis.candidate?.keywordHits.length ?? 0}`} ok={(analysis.candidate?.keywordHits.length ?? 0) > 0} />
-            </div>
-          </div>
-          {analysis.candidate && <TitleCandidateCard candidate={analysis.candidate} onCopy={() => void copyText(analysis.title, "标题已复制。")} compact />}
-          <div className="title-recommendations">
-            {analysis.recommendations.map((item) => <span key={item}>{item}</span>)}
+          <div className="title-v2-candidate-grid">
+            {generated.candidates.map((candidate) => (
+              <TitleCandidateCardV2
+                key={candidate.id}
+                candidate={candidate}
+                onCopy={() => void copyText(candidate.title, "标题已复制。")}
+                onCompare={analysis ? () => setCompareCandidate(candidate) : undefined}
+              />
+            ))}
           </div>
         </section>
       )}
 
-      <section className="panel title-generator-panel">
-        <div className="panel-title"><Wand2 size={19} /><h2>生成标题辅助区</h2></div>
-        <div className="title-generator-layout">
-          <label>
-            <span>浏览器 AI 返回的商品 JSON</span>
-            <textarea className="title-json-box" value={aiJson} onChange={(event) => setAiJson(event.target.value)} />
-          </label>
-          <div className="title-generator-side">
-            <button className="primary" onClick={generateFromJson} disabled={generating || loadingData}>
-              {generating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />} 根据 JSON 生成候选
+      <TitleAIDrawer
+        open={aiDrawerOpen}
+        onClose={() => setAiDrawerOpen(false)}
+        aiJson={aiJson}
+        setAiJson={setAiJson}
+        aiPrompt={aiPrompt}
+        generating={generating}
+        loadingData={loadingData}
+        onGenerate={() => void generateFromJson()}
+        onCopyPrompt={() => void copyText(aiPrompt, "AI 提示词已复制。")}
+      />
+    </section>
+  );
+}
+
+function TitleInputCard({
+  productName,
+  setProductName,
+  currentTitle,
+  setCurrentTitle,
+  categoryName,
+  setCategoryName,
+  categoryPickerOpen,
+  setCategoryPickerOpen,
+  categories,
+  selectedCategory,
+  keywordData,
+  analyzing,
+  loadingData,
+  onAnalyze,
+  onReload,
+  onPickExcel,
+  onOpenAi,
+  settings,
+  onSaveSettings,
+  showToast
+}: {
+  productName: string;
+  setProductName: (v: string) => void;
+  currentTitle: string;
+  setCurrentTitle: (v: string) => void;
+  categoryName: string;
+  setCategoryName: (v: string) => void;
+  categoryPickerOpen: boolean;
+  setCategoryPickerOpen: (v: boolean | ((p: boolean) => boolean)) => void;
+  categories: Array<{ name: string; keywordCount: number }>;
+  selectedCategory: { name: string } | undefined;
+  keywordData: TitleKeywordData | null;
+  analyzing: boolean;
+  loadingData: boolean;
+  onAnalyze: () => void;
+  onReload: () => void;
+  onPickExcel: () => void;
+  onOpenAi: () => void;
+  settings: AppSettings;
+  onSaveSettings: (settings: AppSettings) => Promise<void>;
+  showToast: (message: string) => void;
+}) {
+  return (
+    <section className="title-v2-input-card">
+      <div className="title-v2-input-head">
+        <Search size={19} />
+        <h2>标题分析</h2>
+        <div className="title-v2-data-badge">
+          <FileSpreadsheet size={14} />
+          <span>{keywordData ? `${keywordData.totalKeywords} 词库` : "未加载"}</span>
+        </div>
+        <label className="title-v2-ai-switch">
+          <input
+            type="checkbox"
+            checked={settings.titleAiSelectionEnabled}
+            onChange={async (event) => {
+              await onSaveSettings({ ...settings, titleAiSelectionEnabled: event.target.checked });
+              showToast(event.target.checked ? "已开启 AI 智能选词" : "已关闭 AI 智能选词");
+            }}
+          />
+          <span className="title-v2-ai-switch-track"><span className="title-v2-ai-switch-thumb" /></span>
+          <span>AI 智能选词</span>
+        </label>
+      </div>
+      <div className="title-v2-input-grid">
+        <label className="title-v2-field">
+          <span>商品名</span>
+          <input value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="例如：彩棉317夏季长裤" />
+        </label>
+        <label className="title-v2-field title-v2-field-category">
+          <span>类目</span>
+          <div className="title-v2-category-picker">
+            <button
+              type="button"
+              className={clsx("title-v2-category-trigger", categoryPickerOpen && "open")}
+              onClick={() => setCategoryPickerOpen((open) => !open)}
+            >
+              <span>{selectedCategory ? selectedCategory.name : "自动"}</span>
+              <ChevronDown size={14} className={clsx("title-v2-chev", categoryPickerOpen && "open")} />
             </button>
-            {generated && (
-              <div className="title-candidate-grid title-generated-inline">
-                {generated.candidates.map((candidate) => (
-                  <TitleCandidateCard key={candidate.id} candidate={candidate} onCopy={() => void copyText(candidate.title, "标题已复制。")} />
+            {categoryPickerOpen && (
+              <div className="title-v2-category-menu">
+                <button type="button" className={clsx(!categoryName && "active")} onClick={() => { setCategoryName(""); setCategoryPickerOpen(false); }}>
+                  <strong>自动匹配</strong><span>按商品名</span>
+                </button>
+                {categories.slice(0, 32).map((category) => (
+                  <button type="button" key={category.name} className={clsx(category.name === categoryName && "active")} onClick={() => { setCategoryName(category.name); setCategoryPickerOpen(false); }}>
+                    <strong>{category.name}</strong><span>{category.keywordCount}词</span>
+                  </button>
                 ))}
               </div>
             )}
-            <div className="title-message">
-              <strong>生成逻辑</strong>
-              <span>先让浏览器 AI 读取商品详情并整理成 JSON，再交给本地算法生成严格 54/60 字节标题。</span>
-              <span>主流程仍然是分析你写好的标题，生成只作为辅助参考。</span>
+          </div>
+        </label>
+      </div>
+      <label className="title-v2-field">
+        <span>标题（含帛先生前缀）</span>
+        <textarea
+          className="title-v2-textarea"
+          value={currentTitle}
+          onChange={(event) => setCurrentTitle(event.target.value)}
+          placeholder="粘贴完整标题，含帛先生前缀"
+        />
+      </label>
+      <label className="title-v2-field">
+        <span>必含关键词（用空格隔开，会强制带入候选）</span>
+        <input
+          value={settings.titleExtraKeywords}
+          onChange={async (event) => {
+            await onSaveSettings({ ...settings, titleExtraKeywords: event.target.value });
+          }}
+          placeholder="例如：棉麻 男款 凉感"
+        />
+      </label>
+      <div className="title-v2-buttons">
+        <button className="title-v2-primary" onClick={onAnalyze} disabled={analyzing || loadingData}>
+          {analyzing ? <Loader2 className="spin" size={18} /> : <Search size={18} />} 分析评分
+        </button>
+        <button className="title-v2-secondary" onClick={onOpenAi}>
+          <Wand2 size={16} /> AI 生成候选
+        </button>
+        <button className="title-v2-ghost" onClick={onReload} disabled={loadingData}>
+          {loadingData ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} 刷新数据
+        </button>
+        <button className="title-v2-ghost" onClick={onPickExcel}>
+          <FileSpreadsheet size={15} /> 选 Excel
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function TitleScorePanel({
+  analysis,
+  activeTab,
+  setActiveTab,
+  onCopy,
+  onCompare
+}: {
+  analysis: TitleAnalysisResult;
+  activeTab: TitleTab;
+  setActiveTab: (t: TitleTab) => void;
+  onCopy: (text: string, msg: string) => void;
+  onCompare: (candidate: TitleCandidate) => void;
+}) {
+  const breakdown = analysis.scoreBreakdown ?? { keywordScore: 0, byteScore: 0, blueOceanScore: 0 };
+  const gradeColor =
+    analysis.grade === "excellent" ? "var(--green)" :
+    analysis.grade === "good" ? "var(--gold)" :
+    analysis.grade === "needs-work" ? "#fb923c" : "var(--red)";
+
+  return (
+    <section className="title-v2-score-panel">
+      <div className="title-v2-hero">
+        <div className="title-v2-hero-main">
+          <div className="title-v2-score-ring" style={{ "--score": analysis.score, "--color": gradeColor } as CSSProperties}>
+            <div className="title-v2-score-inner">
+              <strong>{analysis.score}</strong>
+              <span>{gradeLabel(analysis.grade)}</span>
+            </div>
+          </div>
+          <div className="title-v2-hero-info">
+            <span className="title-v2-hero-tag" style={{ color: gradeColor, borderColor: gradeColor }}>{gradeLabel(analysis.grade)}</span>
+            <p>{analysis.message}</p>
+            <div className="title-v2-hero-bytes">
+              <div><strong>{analysis.bodyBytes}</strong><span>/54 主体字节</span></div>
+              <div><strong>{analysis.totalBytes}</strong><span>/60 整条字节</span></div>
+              <div><strong>{analysis.substringHits.length}</strong><span>叠加命中</span></div>
             </div>
           </div>
         </div>
-      </section>
+        <div className="title-v2-rings-row">
+          <DimRing label="关键词" value={breakdown.keywordScore} color="var(--green)" icon={<KeyRound size={14} />} />
+          <DimRing label="字节利用" value={breakdown.byteScore} color="var(--gold)" icon={<TrendingUp size={14} />} />
+          <DimRing label="蓝海词" value={breakdown.blueOceanScore} color="var(--blue)" icon={<Sparkles size={14} />} />
+        </div>
+      </div>
+
+      {analysis.candidate && (
+        <button className="title-v2-original-line" onClick={() => onCopy(analysis.title, "标题已复制。")}>
+          <Clipboard size={14} />
+          <span>{analysis.title}</span>
+        </button>
+      )}
+
+      <div className="title-v2-tabs">
+        <button className={clsx(activeTab === "keywords" && "active")} onClick={() => setActiveTab("keywords")}>
+          <KeyRound size={14} /> 关键词命中
+          <em>{analysis.substringHits.length}</em>
+        </button>
+        <button className={clsx(activeTab === "rules" && "active")} onClick={() => setActiveTab("rules")}>
+          <ListChecks size={14} /> 规则检查
+          {analysis.candidate && <em>{analysis.candidate.ruleChecks.filter((r) => !r.passed).length} 个未通过</em>}
+        </button>
+        <button className={clsx(activeTab === "advice" && "active")} onClick={() => setActiveTab("advice")}>
+          <Lightbulb size={14} /> 优化建议
+          <em>{analysis.recommendations.length}</em>
+        </button>
+      </div>
+
+      <div className="title-v2-tab-body">
+        {activeTab === "keywords" && (
+          <div className="title-v2-hit-list">
+            {analysis.substringHits.length === 0 ? (
+              <span className="title-v2-empty-line">尚未命中任何 Excel 关键词，建议参考下方推荐标题调整词序。</span>
+            ) : (
+              analysis.substringHits.slice(0, 32).map((hit) => (
+                <span
+                  key={`${hit.start}-${hit.keyword}`}
+                  className={clsx("title-v2-hit", hit.value >= 20 ? "high" : hit.value >= 8 ? "mid" : "low")}
+                >
+                  {hit.keyword}
+                  {hit.rank ? <em>#{hit.rank}</em> : null}
+                </span>
+              ))
+            )}
+          </div>
+        )}
+        {activeTab === "rules" && analysis.candidate && (
+          <div className="title-v2-rule-list">
+            {analysis.candidate.ruleChecks.map((rule) => (
+              <div key={rule.key} className={clsx("title-v2-rule", rule.passed ? "ok" : rule.required ? "danger" : "warn")}>
+                {rule.passed ? <Check size={14} /> : <X size={14} />}
+                <strong>{rule.label}</strong>
+                <span>{rule.detail}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {activeTab === "advice" && (
+          <div className="title-v2-reco-grid">
+            {analysis.recommendations.length === 0 ? (
+              <span className="title-v2-empty-line">没有明显可优化的点，当前标题已经比较合格。</span>
+            ) : (
+              analysis.recommendations.map((item) => (
+                <RecommendationCardV2 key={item.message} item={item} />
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {analysis.suggestedTitles.length > 0 && (
+        <div className="title-v2-suggested">
+          <div className="title-v2-section-head">
+            <Sparkles size={16} />
+            <h3>系统推荐标题</h3>
+            <span>{analysis.suggestedTitles.length} 个</span>
+          </div>
+          <div className="title-v2-candidate-grid">
+            {analysis.suggestedTitles.map((candidate) => (
+              <TitleCandidateCardV2
+                key={candidate.id}
+                candidate={candidate}
+                onCopy={() => onCopy(candidate.title, "标题已复制。")}
+                onCompare={() => onCompare(candidate)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {analysis.endingAdvice && (
+        <div className="title-v2-ending">{analysis.endingAdvice}</div>
+      )}
     </section>
+  );
+}
+
+function DimRing({ label, value, color, icon }: { label: string; value: number; color: string; icon: React.ReactNode }) {
+  const safeValue = Math.max(0, Math.min(100, value));
+  return (
+    <div className="title-v2-dim-ring" style={{ "--ring-value": safeValue, "--ring-color": color } as CSSProperties}>
+      <div className="title-v2-dim-ring-circle">
+        <strong>{Math.round(safeValue)}</strong>
+      </div>
+      <div className="title-v2-dim-ring-info">
+        <span>{icon} {label}</span>
+        <em>满分 100</em>
+      </div>
+    </div>
+  );
+}
+
+function TitleCandidateCardV2({
+  candidate,
+  onCopy,
+  onCompare
+}: {
+  candidate: TitleCandidate;
+  onCopy: () => void;
+  onCompare?: () => void;
+}) {
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const failedRequired = candidate.ruleChecks.filter((rule) => rule.required && !rule.passed);
+  const displayScore = Math.max(0, Math.min(100, Math.round(candidate.score / 12)));
+  const scoreColor = displayScore >= 80 ? "var(--green)" : displayScore >= 60 ? "var(--gold)" : "var(--red)";
+
+  return (
+    <article className={clsx("title-v2-candidate", failedRequired.length > 0 && "warned")} data-mode={candidate.mode}>
+      <div className="title-v2-candidate-head">
+        <span className="title-v2-mode-chip" data-mode={candidate.mode}>{candidate.label}</span>
+        <div className="title-v2-candidate-score" style={{ "--score": displayScore, "--color": scoreColor } as CSSProperties}>
+          <strong>{displayScore}</strong>
+        </div>
+        <span className="title-v2-candidate-bytes">{candidate.totalBytes}/60 字节</span>
+      </div>
+      <div className="title-v2-candidate-title">
+        {renderHighlighted(candidate.title, candidate.keywordHits)}
+      </div>
+      <div className="title-v2-candidate-actions">
+        <button className="title-v2-action" onClick={onCopy}>
+          <Clipboard size={13} /> 复制
+        </button>
+        {onCompare && (
+          <button className="title-v2-action" onClick={onCompare}>
+            <GitCompare size={13} /> 加入对比
+          </button>
+        )}
+        <button className="title-v2-action ghost" onClick={() => setRulesOpen((v) => !v)}>
+          <ListChecks size={13} /> 规则{rulesOpen ? "收起" : "展开"}
+        </button>
+      </div>
+      {rulesOpen && (
+        <div className="title-v2-candidate-rules">
+          {candidate.ruleChecks.map((rule) => (
+            <div key={rule.key} className={clsx("title-v2-rule-mini", rule.passed ? "ok" : rule.required ? "danger" : "warn")}>
+              {rule.passed ? <Check size={11} /> : <X size={11} />} {rule.label}
+            </div>
+          ))}
+        </div>
+      )}
+      {failedRequired.length > 0 && (
+        <div className="title-v2-warn-line">硬规则未通过：{failedRequired.map((r) => r.label).join("、")}</div>
+      )}
+    </article>
+  );
+}
+
+function renderHighlighted(title: string, hits: Array<{ keyword: string; weight: number }>) {
+  if (!hits.length) return <span>{title}</span>;
+  const sorted = [...hits].sort((a, b) => b.keyword.length - a.keyword.length);
+  const segments: Array<{ text: string; weight: number } | { text: string }> = [{ text: title }];
+  for (const hit of sorted) {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if ("weight" in seg) continue;
+      const idx = seg.text.indexOf(hit.keyword);
+      if (idx < 0) continue;
+      const before = seg.text.slice(0, idx);
+      const after = seg.text.slice(idx + hit.keyword.length);
+      const inserts: typeof segments = [];
+      if (before) inserts.push({ text: before });
+      inserts.push({ text: hit.keyword, weight: hit.weight });
+      if (after) inserts.push({ text: after });
+      segments.splice(i, 1, ...inserts);
+    }
+  }
+  return (
+    <>
+      {segments.map((seg, idx) => {
+        if (!("weight" in seg)) return <span key={idx}>{seg.text}</span>;
+        const cls = seg.weight >= 20 ? "hit-high" : seg.weight >= 8 ? "hit-mid" : "hit-low";
+        return <em key={idx} className={cls}>{seg.text}</em>;
+      })}
+    </>
+  );
+}
+
+function TitleCompareView({
+  original,
+  candidate,
+  onExit,
+  onCopy
+}: {
+  original: TitleAnalysisResult;
+  candidate: TitleCandidate;
+  onExit: () => void;
+  onCopy: (text: string, msg: string) => void;
+}) {
+  const originalScore = Math.max(0, Math.min(100, Math.round(original.score)));
+  const candidateScore = Math.max(0, Math.min(100, Math.round(candidate.score / 12)));
+  const diff = candidateScore - originalScore;
+  const diffColor = diff > 0 ? "var(--green)" : diff < 0 ? "var(--red)" : "var(--muted)";
+
+  const originalKeywords = new Set((original.candidate?.keywordHits ?? []).map((h) => h.keyword));
+  const candidateKeywords = new Set(candidate.keywordHits.map((h) => h.keyword));
+  const both = [...originalKeywords].filter((k) => candidateKeywords.has(k));
+  const onlyOriginal = [...originalKeywords].filter((k) => !candidateKeywords.has(k));
+  const onlyCandidate = [...candidateKeywords].filter((k) => !originalKeywords.has(k));
+
+  const originalRules = original.candidate?.ruleChecks ?? [];
+  const candidateRules = candidate.ruleChecks;
+  const candidateBetter = candidateRules.filter((cr) => {
+    const orig = originalRules.find((or) => or.key === cr.key);
+    return cr.passed && orig && !orig.passed;
+  });
+  const originalBetter = originalRules.filter((or) => {
+    const cand = candidateRules.find((cr) => cr.key === or.key);
+    return or.passed && cand && !cand.passed;
+  });
+
+  return (
+    <section className="title-v2-compare">
+      <div className="title-v2-compare-head">
+        <ArrowLeftRight size={18} />
+        <h3>原标题 vs 推荐对比</h3>
+        <button className="title-v2-ghost" onClick={onExit}>
+          <X size={14} /> 退出对比
+        </button>
+      </div>
+
+      <div className="title-v2-compare-cols">
+        <div className="title-v2-compare-col">
+          <span className="title-v2-compare-tag">原标题</span>
+          <div className="title-v2-compare-score-wrap">
+            <strong className="title-v2-compare-score">{originalScore}</strong>
+            <em className="title-v2-compare-score-unit">/100</em>
+          </div>
+          <button className="title-v2-compare-title" onClick={() => onCopy(original.title, "原标题已复制。")}>
+            {original.title}
+          </button>
+          <div className="title-v2-compare-meta">
+            <span>主体 {original.bodyBytes}/54</span>
+            <span>整条 {original.totalBytes}/60</span>
+            <span>命中 {original.substringHits.length}</span>
+          </div>
+        </div>
+        <div className="title-v2-compare-arrow">
+          <ArrowLeftRight size={20} />
+          <em className={clsx(diff > 0 ? "up" : diff < 0 ? "down" : "")} style={{ color: diffColor }}>
+            {diff > 0 ? `+${diff}` : diff}
+          </em>
+          <span>分差</span>
+        </div>
+        <div className="title-v2-compare-col">
+          <span className="title-v2-compare-tag highlight">推荐</span>
+          <div className="title-v2-compare-score-wrap">
+            <strong className="title-v2-compare-score highlight">{candidateScore}</strong>
+            <em className="title-v2-compare-score-unit">/100</em>
+          </div>
+          <button className="title-v2-compare-title" onClick={() => onCopy(candidate.title, "推荐标题已复制。")}>
+            {candidate.title}
+          </button>
+          <div className="title-v2-compare-meta">
+            <span>整条 {candidate.totalBytes}/60</span>
+            <span>命中 {candidate.keywordHits.length}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="title-v2-compare-keywords">
+        <h4>关键词分布</h4>
+        <div className="title-v2-keyword-cols">
+          <div>
+            <span className="label">仅原标题</span>
+            <div className="chips">
+              {onlyOriginal.length === 0 ? <em>无</em> : onlyOriginal.map((k) => <span key={k} className="chip orig">{k}</span>)}
+            </div>
+          </div>
+          <div>
+            <span className="label">两者共有</span>
+            <div className="chips">
+              {both.length === 0 ? <em>无</em> : both.map((k) => <span key={k} className="chip both">{k}</span>)}
+            </div>
+          </div>
+          <div>
+            <span className="label">仅推荐</span>
+            <div className="chips">
+              {onlyCandidate.length === 0 ? <em>无</em> : onlyCandidate.map((k) => <span key={k} className="chip cand">{k}</span>)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {(candidateBetter.length > 0 || originalBetter.length > 0) && (
+        <div className="title-v2-compare-rules">
+          <h4>规则差异</h4>
+          {candidateBetter.length > 0 && (
+            <div className="title-v2-rule-diff up">
+              <strong>推荐通过、原标题未通过：</strong>
+              {candidateBetter.map((r) => <span key={r.key}><Check size={12} /> {r.label}</span>)}
+            </div>
+          )}
+          {originalBetter.length > 0 && (
+            <div className="title-v2-rule-diff down">
+              <strong>原标题通过、推荐反而未通过：</strong>
+              {originalBetter.map((r) => <span key={r.key}><X size={12} /> {r.label}</span>)}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="title-v2-compare-summary">
+        {diff > 0
+          ? `换成推荐预计提升 ${diff} 分（百分制）${candidateBetter.length > 0 ? `，主要改进在 ${candidateBetter.map((r) => r.label).join("、")}` : ""}。`
+          : diff < 0
+            ? `推荐分数反而比原标题低 ${Math.abs(diff)} 分（百分制），谨慎替换。`
+            : "两者分数持平，可根据风格偏好自行选择。"}
+      </div>
+    </section>
+  );
+}
+
+function TitleAIDrawer({
+  open,
+  onClose,
+  aiJson,
+  setAiJson,
+  aiPrompt,
+  generating,
+  loadingData,
+  onGenerate,
+  onCopyPrompt
+}: {
+  open: boolean;
+  onClose: () => void;
+  aiJson: string;
+  setAiJson: (v: string) => void;
+  aiPrompt: string;
+  generating: boolean;
+  loadingData: boolean;
+  onGenerate: () => void;
+  onCopyPrompt: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="title-v2-drawer-backdrop" onClick={onClose}>
+      <aside className="title-v2-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="title-v2-drawer-head">
+          <Wand2 size={18} />
+          <h3>AI 生成候选</h3>
+          <button className="title-v2-ghost" onClick={onClose}><X size={15} /></button>
+        </div>
+        <div className="title-v2-drawer-body">
+          <div className="title-v2-drawer-step">
+            <span className="title-v2-step">①</span>
+            <strong>把这段提示词喂给浏览器里的 AI</strong>
+            <button className="title-v2-ghost-line" onClick={onCopyPrompt}>
+              <Clipboard size={13} /> 复制提示词
+            </button>
+            <pre className="title-v2-prompt-box">{aiPrompt}</pre>
+          </div>
+          <div className="title-v2-drawer-step">
+            <span className="title-v2-step">②</span>
+            <strong>把 AI 返回的 JSON 贴在这里</strong>
+            <textarea className="title-v2-json-box" value={aiJson} onChange={(e) => setAiJson(e.target.value)} />
+          </div>
+          <div className="title-v2-drawer-actions">
+            <button className="title-v2-primary" onClick={onGenerate} disabled={generating || loadingData}>
+              {generating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />} 生成 5 个候选
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -328,46 +853,27 @@ function TitleAnalyzeAnimation({ label }: { label: string }) {
   );
 }
 
-function TitleMetric({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+function RecommendationCardV2({ item }: { item: TitleRecommendation }) {
+  const typeLabels: Record<string, string> = {
+    insert: "插入/替换",
+    reorder: "词序调整",
+    "missing-element": "缺少元素",
+    "unhit-keyword": "未命中",
+    "byte-tip": "字节利用",
+    "blue-ocean": "蓝海词",
+    "root-hint": "高频词根",
+    duplicate: "重复词"
+  };
   return (
-    <div className={clsx("title-metric-line", ok ? "ok" : "warn")}>
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className={clsx("title-v2-reco", `reco-${item.type}`)}>
+      <div className="title-v2-reco-head">
+        <Lightbulb size={14} />
+        <span>{typeLabels[item.type] ?? item.type}</span>
+        {item.estimatedGain > 0 && <em>+{item.estimatedGain} 分</em>}
+      </div>
+      <strong>{item.message}</strong>
+      {item.detail && <p>{item.detail}</p>}
     </div>
-  );
-}
-
-function TitleCandidateCard({ candidate, onCopy, compact = false }: { candidate: TitleCandidate; onCopy: () => void; compact?: boolean }) {
-  const failedRules = candidate.ruleChecks.filter((rule) => rule.required && !rule.passed);
-  return (
-    <article className={clsx("title-candidate-card", compact && "compact")}>
-      <div className="title-candidate-top">
-        <span className="title-mode">{candidate.label}</span>
-        {candidate.score > 0 && <strong className="title-score-mini">评分 {candidate.score}</strong>}
-      </div>
-      <button className="title-copy-line" onClick={onCopy}>
-        <Clipboard size={16} />
-        <span>{candidate.title}</span>
-      </button>
-      <div className="title-rule-list">
-        {candidate.ruleChecks.slice(0, compact ? 10 : 8).map((rule) => (
-          <span key={rule.key} className={clsx(rule.passed ? "ok" : rule.required ? "danger" : "warn")}>
-            {rule.passed ? <Check size={13} /> : <X size={13} />} {rule.label}
-          </span>
-        ))}
-      </div>
-      <div className="title-hit-list">
-        {candidate.keywordHits.slice(0, compact ? 14 : 10).map((hit) => (
-          <span key={`${hit.source}-${hit.keyword}`}>{hit.keyword}</span>
-        ))}
-      </div>
-      {!compact && (
-        <div className="title-token-row">
-          {candidate.tokens.slice(0, 14).map((token) => <span key={token}>{token}</span>)}
-        </div>
-      )}
-      {failedRules.length > 0 && <div className="title-message danger"><strong>仍有硬规则未通过，不建议使用。</strong></div>}
-    </article>
   );
 }
 
