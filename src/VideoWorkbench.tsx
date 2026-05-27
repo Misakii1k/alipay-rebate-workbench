@@ -311,10 +311,6 @@ export function VideoWorkbench({
   return (
     <section className="video-workbench">
       <div className="tool-header video-status-header">
-        <div className="video-internal-title" aria-hidden="true">
-          <p className="eyebrow">视频批量剪辑</p>
-          <h1>视频批量剪辑</h1>
-        </div>
         <div className={clsx("status-pill", ffmpegStatus.available ? "double-check" : "model failed")}>
           <Scissors size={15} /> {ffmpegStatus.available ? `FFmpeg：${ffmpegStatus.acceleration || "可用"}` : "FFmpeg：未就绪"}
         </div>
