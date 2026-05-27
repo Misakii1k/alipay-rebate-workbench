@@ -609,8 +609,8 @@ function ReviewHero({
         <strong>收评助手</strong>
         <em>按商品名检索参考图，AI 生成更自然的买家好评文案</em>
         <div className="review-v2-mode-switch">
-          <div className="review-v2-mode-dropdown" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setMenuOpen(false); }} tabIndex={-1}>
-            <button className="review-v2-mode-dropdown-btn" onClick={() => setMenuOpen(!open)}>
+            <div className="review-v2-mode-dropdown" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setTimeout(() => setMenuOpen(false), 120); }} tabIndex={-1}>
+              <button className="review-v2-mode-dropdown-btn" onClick={() => setMenuOpen(!menuOpen)}>
               {modeLabels[mode].emoji} {modeLabels[mode].label}
               <ChevronDown size={14} className={clsx("review-v2-chev", menuOpen && "open")} />
             </button>
@@ -626,11 +626,15 @@ function ReviewHero({
             )}
           </div>
           {mode !== "ai" && (
-            <label className="review-v2-score-toggle" title={scoringEnabled ? "相关性评分已开启" : "相关性评分已关闭"}>
-              <input type="checkbox" checked={scoringEnabled} onChange={(event) => onToggleScoring(event.target.checked)} />
-              <span>相关性评分</span>
-              <em>{scoringEnabled ? "优先高相关" : "关闭省性能"}</em>
-            </label>
+            <div className="review-v2-score-toggle">
+              <button type="button" className={clsx("review-v2-score-switch", scoringEnabled && "on")} role="switch" aria-checked={scoringEnabled} onClick={() => onToggleScoring(!scoringEnabled)} title={scoringEnabled ? "相关性评分已开启" : "相关性评分已关闭"}>
+                <i className="review-v2-score-switch-thumb" />
+              </button>
+              <div className="review-v2-score-labels">
+                <span>相关性评分</span>
+                <em>{scoringEnabled ? "优先高相关" : "关闭省性能"}</em>
+              </div>
+            </div>
           )}
         </div>
       </div>

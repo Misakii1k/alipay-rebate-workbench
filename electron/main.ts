@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { spawn, execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
@@ -1290,7 +1290,16 @@ async function scanReviewAssets(root: string, query: string, settings?: AppSetti
   const now = Date.now();
   if (!reviewFileCache || reviewFileCache.root !== root || now - reviewFileCache.cachedAt > REVIEW_CACHE_TTL) {
     const disk = await loadReviewIndexFile(root);
+    let cacheValid = false;
     if (disk) {
+      try {
+        const rootStat = statSync(root);
+        const indexPath = reviewIndexFilePath(root);
+        const indexStat = statSync(indexPath);
+        cacheValid = rootStat.mtimeMs <= indexStat.mtimeMs;
+      } catch { cacheValid = false; }
+    }
+    if (disk && cacheValid) {
       reviewFileCache = { root, fileIndex: disk.fileIndex, folderIndex: disk.folderIndex, cachedAt: now };
       if (event) event.sender.send("review:scanProgress", { scanned: disk.fileIndex.length, currentDir: "", phase: "loaded-cache" });
     } else {
@@ -1523,7 +1532,7 @@ async function loadReviewIndexFile(root: string): Promise<{ fileIndex: ReviewFil
   }
 }
 
-const REVIEW_INDEX_DISK_TTL = 1000 * 60 * 60 * 24 * 7;
+const REVIEW_INDEX_DISK_TTL = 1000 * 60 * 60 * 24 * 365;
 
 async function walkMediaAndFoldersWithProgress(
   root: string,

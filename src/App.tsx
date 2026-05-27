@@ -105,6 +105,7 @@ export default function App() {
   const [maturityInfoOpen, setMaturityInfoOpen] = useState(false);
   const lastClipboardSignature = useRef("");
   const autoRecognizingRef = useRef(false);
+  const skipAutoRecognizeRef = useRef(false);
 
   const parsed = useMemo(() => buildRows(amountInput, remarkInput), [amountInput, remarkInput]);
   const currentRow = rows[currentIndex];
@@ -173,9 +174,15 @@ export default function App() {
         setManualText(snapshot.text);
         if (autoRecognizingRef.current) return;
         autoRecognizingRef.current = true;
-        showToast("剪切板已读取，正在自动识别…");
-        try { await doRecognizeRef.current(snapshot.text); }
-        finally { autoRecognizingRef.current = false; }
+        if (skipAutoRecognizeRef.current) {
+          skipAutoRecognizeRef.current = false;
+          showToast("备注已复制，跳过自动识别。");
+          autoRecognizingRef.current = false;
+        } else {
+          showToast("剪切板已读取，正在自动识别…");
+          try { await doRecognizeRef.current(snapshot.text); }
+          finally { autoRecognizingRef.current = false; }
+        }
       } catch {
         if (!canceled) showToast("读取剪切板失败，请手动粘贴。");
       }
@@ -348,19 +355,11 @@ export default function App() {
         ? partial
         : await recognizeText(text, settings);
       applyRecognition(result);
-      if (settings.enhancedCloudValidation) {
-        const cloudReview = await reviewRecognitionCloud(text, result, settings);
-        setRows((prev) =>
-          prev.map((row, index) =>
-            index === currentIndex ? { ...row, cloudReview } : row
-          )
-        );
-      }
     } catch { /* auto-recognize silent fail */ }
     finally { setRecognizing(false); }
   };
 
-  function saveManual() {
+  async function saveManual() {
     if (!currentRow) return;
     if (!isValidAccount(manualAccount)) {
       showToast("支付宝账号必须是手机号或邮箱。");
@@ -370,18 +369,37 @@ export default function App() {
       showToast("请填写收款方姓名。");
       return;
     }
+    const savedAccount = manualAccount.trim();
+    const savedName = manualName.trim();
+    const savedIndex = currentIndex;
+    const savedRemark = currentRow.remark;
     setRows((prev) =>
       prev.map((row, index) =>
-        index === currentIndex ? { ...row, account: manualAccount.trim(), name: manualName.trim(), status: "manual", confidence: 1 } : row
+        index === currentIndex ? { ...row, account: savedAccount, name: savedName, status: "manual", confidence: 1 } : row
       )
     );
     showToast("已保存当前行。");
     if (settings.autoAdvance) setCurrentIndex((index) => Math.min(index + 1, Math.max(rows.length - 1, 0)));
+
+    if (settings.enhancedCloudValidation && savedRemark.trim()) {
+      try {
+        const cloudReview = await reviewRecognitionCloud(savedRemark, { account: savedAccount, name: savedName, confidence: 1, reason: "手动保存" }, settings);
+        setRows((prev) =>
+          prev.map((row, index) =>
+            index === savedIndex ? { ...row, cloudReview } : row
+          )
+        );
+        if (cloudReview.valid === false) {
+          showToast("云端校验发现差异，可在预览表查看。");
+        }
+      } catch { /* cloud validation non-blocking */ }
+    }
   }
 
   async function copyRemark() {
     if (!currentRow) return;
     await window.alipayWorkbench.writeClipboardText(currentRow.remark);
+    skipAutoRecognizeRef.current = true;
     showToast("备注已复制。");
   }
 
@@ -520,7 +538,7 @@ export default function App() {
           </section>
         )}
 
-        {view === "preview" && <RowsTable rows={rows} currentIndex={currentIndex} onClear={clearRows} onPick={(index) => { setCurrentIndex(index); setView("entry"); }} />}
+         {view === "preview" && <RowsTable rows={rows} currentIndex={currentIndex} onClear={clearRows} onPick={(index) => { setCurrentIndex(index); setView("entry"); }} settings={settings} showToast={showToast} />}
 
         {view === "export" && (
           <section className="grid-two">
@@ -654,14 +672,14 @@ function PreviewRows({ amountLines, remarkLines }: { amountLines: string[]; rema
   return <div className="preview-list">{Array.from({ length: visibleCount }).map((_, index) => <div key={index} className="preview-row"><span>{index + 1}</span><b>{amountLines[index] || "-"}</b><em>{remarkLines[index] || "-"}</em></div>)}</div>;
 }
 
-function RowsTable({ rows, currentIndex, onPick, onClear }: { rows: RebateRow[]; currentIndex: number; onPick: (index: number) => void; onClear: () => void }) {
+function RowsTable({ rows, currentIndex, onPick, onClear, settings, showToast }: { rows: RebateRow[]; currentIndex: number; onPick: (index: number) => void; onClear: () => void; settings: AppSettings; showToast: (message: string) => void }) {
   return (
     <Panel title="完整预览" icon={Eye} action={<button className="secondary-action danger-text compact" onClick={onClear}><Eraser size={16} /> 清空列表</button>}>
       {rows.length ? (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>序号</th><th>账号</th><th>姓名</th><th>金额</th><th>备注</th><th>状态</th><th>处理</th></tr></thead>
-            <tbody>{rows.map((row, index) => <tr key={row.id} className={clsx(index === currentIndex && "selected")}><td>{index + 1}</td><td>{row.account || "待填写"}</td><td>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td><td><button onClick={() => onPick(index)}>编辑</button></td></tr>)}</tbody>
+            <thead><tr><th>序号</th><th>账号</th><th>姓名</th><th>金额</th><th>备注</th><th>状态</th>{settings.enhancedCloudValidation && <th>云端校验</th>}<th>处理</th></tr></thead>
+            <tbody>{rows.map((row, index) => <tr key={row.id} className={clsx(index === currentIndex && "selected")}><td>{index + 1}</td><td>{row.account || "待填写"}</td><td>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td>{settings.enhancedCloudValidation && (<td>{row.cloudReview?.status === "checking" ? <span className="cloud-status checking"><Loader2 className="spin" size={12} /></span> : row.cloudReview?.valid === true ? <span className="cloud-status valid">✓ 一致</span> : row.cloudReview?.valid === false ? (<div className="cloud-status warning"><span>⚠ {row.cloudReview.account || "—"} / {row.cloudReview.name || "—"}</span><button className="cloud-adopt-btn" onClick={() => { /* 采纳云端结果需要在父组件操作，这里通过 toast 提示 */ showToast("请在录入页面手动修改。"); }}>采纳</button></div>) : row.cloudReview?.status === "error" ? <span className="cloud-status error">校验失败</span> : <span className="cloud-status idle">—</span>}</td>)}<td><button onClick={() => onPick(index)}>编辑</button></td></tr>)}</tbody>
           </table>
         </div>
       ) : <EmptyState text="当前没有返款列表，请先在批量导入中生成。" />}
