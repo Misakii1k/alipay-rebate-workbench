@@ -644,10 +644,10 @@ function ReviewHero({
           <div className="review-v2-search-input">
             <Search size={20} />
             <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onSearch(); }} placeholder="搜索商品、颜色或型号，例如：彩棉317" />
-            <button className="review-v2-search-btn" onClick={onSearch} disabled={searching}>{searching ? <Loader2 className="spin" size={18} /> : "??"}</button>
+            <button className="review-v2-search-btn" onClick={onSearch} disabled={searching}>{searching ? <Loader2 className="spin" size={18} /> : <Search size={16} />}</button>
           </div>
           <div className="review-v2-meta-row">
-            <button className="review-v2-root-pill" onClick={onPickRoot}><FolderOpen size={14} /><span>{rootLabel}</span><em>??</em></button>
+            <button className="review-v2-root-pill" onClick={onPickRoot}><FolderOpen size={14} /><span>{rootLabel}</span></button>
             <button className="review-v2-root-pill ghost" onClick={onRebuildIndex} title="忽略缓存，重新扫描全目录"><Hammer size={14} /><span>重建索引</span></button>
           </div>
         </div>

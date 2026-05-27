@@ -37,6 +37,7 @@ import {
   AppSettings,
   DEFAULT_SETTINGS,
   ModelConnectionStatus,
+  CloudReview,
   RebateRow,
   RebateViewKey,
   RecognitionResult,
@@ -382,6 +383,11 @@ export default function App() {
     if (settings.autoAdvance) setCurrentIndex((index) => Math.min(index + 1, Math.max(rows.length - 1, 0)));
 
     if (settings.enhancedCloudValidation && savedRemark.trim()) {
+      setRows((prev) =>
+        prev.map((row, index) =>
+          index === savedIndex ? { ...row, cloudReview: { status: "checking" as const } } : row
+        )
+      );
       try {
         const cloudReview = await reviewRecognitionCloud(savedRemark, { account: savedAccount, name: savedName, confidence: 1, reason: "手动保存" }, settings);
         setRows((prev) =>
@@ -538,7 +544,7 @@ export default function App() {
           </section>
         )}
 
-         {view === "preview" && <RowsTable rows={rows} currentIndex={currentIndex} onClear={clearRows} onPick={(index) => { setCurrentIndex(index); setView("entry"); }} settings={settings} showToast={showToast} />}
+         {view === "preview" && <RowsTable rows={rows} currentIndex={currentIndex} onClear={clearRows} onPick={(index) => { setCurrentIndex(index); setView("entry"); }} onAdoptCloud={(index, cloud) => { setRows((prev) => prev.map((r, i) => i === index ? { ...r, account: cloud.account || r.account, name: cloud.name || r.name, status: "manual" as const, cloudReview: { ...r.cloudReview!, valid: true, status: "passed" as const } } : r)); showToast("已采纳云端结果。"); }} settings={settings} showToast={showToast} />}
 
         {view === "export" && (
           <section className="grid-two">
@@ -672,14 +678,14 @@ function PreviewRows({ amountLines, remarkLines }: { amountLines: string[]; rema
   return <div className="preview-list">{Array.from({ length: visibleCount }).map((_, index) => <div key={index} className="preview-row"><span>{index + 1}</span><b>{amountLines[index] || "-"}</b><em>{remarkLines[index] || "-"}</em></div>)}</div>;
 }
 
-function RowsTable({ rows, currentIndex, onPick, onClear, settings, showToast }: { rows: RebateRow[]; currentIndex: number; onPick: (index: number) => void; onClear: () => void; settings: AppSettings; showToast: (message: string) => void }) {
+function RowsTable({ rows, currentIndex, onPick, onClear, onAdoptCloud, settings, showToast }: { rows: RebateRow[]; currentIndex: number; onPick: (index: number) => void; onClear: () => void; onAdoptCloud: (index: number, cloud: CloudReview) => void; settings: AppSettings; showToast: (message: string) => void }) {
   return (
     <Panel title="完整预览" icon={Eye} action={<button className="secondary-action danger-text compact" onClick={onClear}><Eraser size={16} /> 清空列表</button>}>
       {rows.length ? (
         <div className="table-wrap">
           <table>
             <thead><tr><th>序号</th><th>账号</th><th>姓名</th><th>金额</th><th>备注</th><th>状态</th>{settings.enhancedCloudValidation && <th>云端校验</th>}<th>处理</th></tr></thead>
-            <tbody>{rows.map((row, index) => <tr key={row.id} className={clsx(index === currentIndex && "selected")}><td>{index + 1}</td><td>{row.account || "待填写"}</td><td>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td>{settings.enhancedCloudValidation && (<td>{row.cloudReview?.status === "checking" ? <span className="cloud-status checking"><Loader2 className="spin" size={12} /></span> : row.cloudReview?.valid === true ? <span className="cloud-status valid">✓ 一致</span> : row.cloudReview?.valid === false ? (<div className="cloud-status warning"><span>⚠ {row.cloudReview.account || "—"} / {row.cloudReview.name || "—"}</span><button className="cloud-adopt-btn" onClick={() => { /* 采纳云端结果需要在父组件操作，这里通过 toast 提示 */ showToast("请在录入页面手动修改。"); }}>采纳</button></div>) : row.cloudReview?.status === "error" ? <span className="cloud-status error">校验失败</span> : <span className="cloud-status idle">—</span>}</td>)}<td><button onClick={() => onPick(index)}>编辑</button></td></tr>)}</tbody>
+            <tbody>{rows.map((row, index) => <tr key={row.id} className={clsx(index === currentIndex && "selected")}><td>{index + 1}</td><td>{row.account || "待填写"}</td><td>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td>{settings.enhancedCloudValidation && (<td>{row.cloudReview?.status === "checking" ? <span className="cloud-status checking"><Loader2 className="spin" size={12} /><span style={{marginLeft: 4}}>校验中</span></span> : row.cloudReview?.valid === true ? <span className="cloud-status valid">✓ 一致</span> : row.cloudReview?.valid === false ? (<div className="cloud-status warning"><span>⚠ {row.cloudReview.account || "—"} / {row.cloudReview.name || "—"}</span><button className="cloud-adopt-btn" onClick={() => { onAdoptCloud(index, row.cloudReview!); }}>采纳</button></div>) : row.cloudReview?.status === "error" ? <span className="cloud-status error">校验失败</span> : <span className="cloud-status idle">—</span>}</td>)}<td><button onClick={() => onPick(index)}>编辑</button></td></tr>)}</tbody>
           </table>
         </div>
       ) : <EmptyState text="当前没有返款列表，请先在批量导入中生成。" />}
