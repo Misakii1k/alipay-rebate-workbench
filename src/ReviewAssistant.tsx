@@ -62,6 +62,7 @@ export function ReviewAssistant({
   const [customPrompt, setCustomPrompt] = useState(settings.reviewCustomPrompt ?? "");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [showModeSelect, setShowModeSelect] = useState(() => reviewSessionState ? false : true);
   const [mode, setModeState] = useState<ReviewWorkspaceMode>(settings.reviewWorkspaceMode);
   const [availableModels, setAvailableModels] = useState<{ id: string; name: string }[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -401,22 +402,26 @@ export function ReviewAssistant({
 
   return (
     <section className={clsx("review-assistant review-v2", searched && "searched")}>
-      <ReviewHero
-        mode={mode}
-        onModeChange={(nextMode) => void setMode(nextMode)}
-        scoringEnabled={settings.reviewScoringEnabled}
-        onToggleScoring={(enabled) => void toggleScoring(enabled)}
-        query={query}
-        setQuery={setQuery}
-        onSearch={() => void searchAssets()}
-        searching={searching}
-        recentQueries={recentQueries}
-        onPickRecent={(q) => void searchAssets(q)}
-        onPickRoot={pickRoot}
-        rootLabel={rootLabel}
-        onRebuildIndex={() => void rebuildIndex()}
-        inputRef={inputRef}
-      />
+      {showModeSelect ? (
+        <ModeSelectPage mode={mode} onSelect={(nextMode) => { setModeState(nextMode); setShowModeSelect(false); onSaveSettings({ ...settings, reviewWorkspaceMode: nextMode }); }} />
+      ) : (
+        <>
+          <ReviewHero
+            mode={mode}
+            onModeChange={(nextMode) => void setMode(nextMode)}
+            scoringEnabled={settings.reviewScoringEnabled}
+            onToggleScoring={(enabled) => void toggleScoring(enabled)}
+            query={query}
+            setQuery={setQuery}
+            onSearch={() => void searchAssets()}
+            searching={searching}
+            recentQueries={recentQueries}
+            onPickRecent={(q) => void searchAssets(q)}
+            onPickRoot={pickRoot}
+            rootLabel={rootLabel}
+            onRebuildIndex={() => void rebuildIndex()}
+            inputRef={inputRef}
+          />
 
       {(searching || scanProgress) && (
         <ReviewScanProgressBar progress={scanProgress} searching={searching} />
@@ -509,7 +514,65 @@ export function ReviewAssistant({
           onRemove={(text) => void removeSavedCopy(text)}
         />
       )}
+        </>
+      )}
     </section>
+  );
+}
+
+function ModeSelectPage({ mode, onSelect }: { mode: ReviewWorkspaceMode; onSelect: (m: ReviewWorkspaceMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const modeConfig = {
+    search: { icon: Search, label: "搜索模式", desc: "搜索商品参考图", color: "var(--green)", points: ["按关键词检索图片", "预览和选择参考图", "分类浏览文件夹", "拖拽导出到其他应用"] },
+    ai: { icon: WandSparkles, label: "AI评价模式", desc: "AI 生成好评文案", color: "var(--blue)", points: ["输入商品名称和描述", "调整 Emoji / 买家味等风格", "批量生成并收藏文案", "字数控制与思考模式"] },
+    mixed: { icon: Sparkles, label: "混合模式", desc: "搜索 + AI 生成完整流程", color: "var(--gold)", points: ["搜索图片 + AI 生成", "智能评分优先匹配好图", "一键连招：选图→生成", "收藏和管理全部文案"] }
+  };
+  const current = modeConfig[mode];
+
+  return (
+    <div className="review-mode-select-page">
+      <div className="review-mode-select-hero">
+        <Sparkles size={26} />
+        <h2>收评助手</h2>
+        <p>选择一种工作模式开始评价运营，也可稍后在顶部切换</p>
+      </div>
+      <div className="review-mode-select-cards">
+        {(Object.entries(modeConfig) as Array<[ReviewWorkspaceMode, typeof modeConfig.search]>).map(([key, config]) => (
+          <button key={key} className={clsx("review-mode-select-card", mode === key && "active")} onClick={() => { if (mode !== key) onSelect(key); }}>
+            <div className="review-mode-card-illustration">
+              <config.icon size={48} />
+            </div>
+            <h3>{config.label}</h3>
+            <p className="review-mode-card-desc">{config.desc}</p>
+            <ul className="review-mode-card-points">
+              {config.points.map((point) => <li key={point}>{point}</li>)}
+            </ul>
+            {mode === key && <span className="review-mode-card-current"><Check size={14} /> 当前模式</span>}
+          </button>
+        ))}
+      </div>
+      <div className="review-mode-select-footer">
+        <span>默认模式：</span>
+        <div className="review-mode-select-footer-dropdown" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }} tabIndex={-1}>
+          <button onClick={() => setOpen(!open)}>
+            <current.icon size={16} />
+            <span>{current.label}</span>
+            <ChevronDown size={14} className={clsx("review-mode-chev", open && "open")} />
+          </button>
+          {open && (
+            <div className="review-mode-select-footer-menu">
+              {(Object.entries(modeConfig) as Array<[ReviewWorkspaceMode, typeof modeConfig.search]>).map(([key, config]) => (
+                <button key={key} className={clsx(mode === key && "active")} onClick={() => { onSelect(key); setOpen(false); }}>
+                  <config.icon size={14} />
+                  <strong>{config.label}</strong>
+                  <span>{config.desc}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -532,6 +595,13 @@ function ReviewHero({
   onRebuildIndex: () => void;
   inputRef: React.RefObject<HTMLInputElement>;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const modeLabels: Record<ReviewWorkspaceMode, { label: string; emoji: string }> = {
+    mixed: { label: "混合模式", emoji: "🔀" },
+    search: { label: "搜索模式", emoji: "🔍" },
+    ai: { label: "AI评价", emoji: "🤖" }
+  };
+
   return (
     <div className="review-v2-hero">
       <div className="review-v2-hero-head">
@@ -539,13 +609,22 @@ function ReviewHero({
         <strong>收评助手</strong>
         <em>按商品名检索参考图，AI 生成更自然的买家好评文案</em>
         <div className="review-v2-mode-switch">
-          {([
-            ["mixed", "混合模式"],
-            ["search", "搜索模式"],
-            ["ai", "AI评价模式"]
-          ] as Array<[ReviewWorkspaceMode, string]>).map(([value, label]) => (
-            <button key={value} className={clsx(mode === value && "active")} onClick={() => onModeChange(value)}>{label}</button>
-          ))}
+          <div className="review-v2-mode-dropdown" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setMenuOpen(false); }} tabIndex={-1}>
+            <button className="review-v2-mode-dropdown-btn" onClick={() => setMenuOpen(!open)}>
+              {modeLabels[mode].emoji} {modeLabels[mode].label}
+              <ChevronDown size={14} className={clsx("review-v2-chev", menuOpen && "open")} />
+            </button>
+            {menuOpen && (
+              <div className="review-v2-mode-dropdown-menu">
+                {(Object.entries(modeLabels) as Array<[ReviewWorkspaceMode, typeof modeLabels.mixed]>).map(([key, item]) => (
+                  <button key={key} className={clsx(mode === key && "active")} onClick={() => { onModeChange(key); setMenuOpen(false); }}>
+                    <span className="review-v2-mode-menu-emoji">{item.emoji}</span>
+                    <strong>{item.label}</strong>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {mode !== "ai" && (
             <label className="review-v2-score-toggle" title={scoringEnabled ? "相关性评分已开启" : "相关性评分已关闭"}>
               <input type="checkbox" checked={scoringEnabled} onChange={(event) => onToggleScoring(event.target.checked)} />
@@ -651,7 +730,7 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
       <div className="review-v2-ai-head"><WandSparkles size={18} /><strong>AI 生成好评</strong><span className="review-v2-ai-tag">高级功能</span><div className="review-v2-ai-model"><select value={selectedModelId} onChange={(e) => onModelChange(e.target.value)}>{availableModels.length === 0 && <option value={selectedModelId}>{selectedModelId || "未选择模型"}</option>}{availableModels.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select><button className="review-v2-ai-refresh" onClick={onLoadModels} disabled={loadingModels} title="刷新可用模型">{loadingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}</button></div></div>
       <div className="review-v2-sliders">
         <label className="review-v2-desc review-v2-query-field"><span>商品/搜索词</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="例如：彩棉317 夏季长裤" /></label>
-        <label className="review-v2-desc review-v2-length-field"><span>目标字数：{options.targetLength}</span><input type="range" min={30} max={300} step={5} value={options.targetLength} onChange={(e) => setOptions((p) => ({ ...p, targetLength: Number(e.target.value) }))} /></label>
+        <label className="review-v2-desc review-v2-length-field"><span>目标字数：{options.targetLength}</span><input type="range" min={30} max={100} step={5} value={options.targetLength} onChange={(e) => setOptions((p) => ({ ...p, targetLength: Number(e.target.value) }))} /></label>
         <SliderCompact label="Emoji" value={options.emojiLevel} onChange={(v) => setOptions((p) => ({ ...p, emojiLevel: v }))} />
         <SliderCompact label="专业" value={options.professionalLevel} onChange={(v) => setOptions((p) => ({ ...p, professionalLevel: v }))} />
         <SliderCompact label="买家味" value={options.buyerLevel} onChange={(v) => setOptions((p) => ({ ...p, buyerLevel: v }))} />

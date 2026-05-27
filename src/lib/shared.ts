@@ -566,7 +566,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     reviewSavedCopies: Array.isArray(raw.reviewSavedCopies) ? raw.reviewSavedCopies.filter((x: unknown) => typeof x === "string").slice(0, 200) : [],
     reviewWorkspaceMode: normalizeReviewWorkspaceMode(raw.reviewWorkspaceMode),
     reviewScoringEnabled: Boolean(raw.reviewScoringEnabled ?? DEFAULT_SETTINGS.reviewScoringEnabled),
-    reviewTargetLength: clampNumber(raw.reviewTargetLength, 30, 300, DEFAULT_SETTINGS.reviewTargetLength),
+    reviewTargetLength: clampNumber(raw.reviewTargetLength, 30, 100, DEFAULT_SETTINGS.reviewTargetLength),
     reviewThinkingMode: normalizeReviewThinkingMode(raw.reviewThinkingMode),
     reviewThinkingEffort: normalizeReviewThinkingEffort(raw.reviewThinkingEffort),
     titleAiSelectionEnabled: Boolean(raw.titleAiSelectionEnabled ?? DEFAULT_SETTINGS.titleAiSelectionEnabled),
