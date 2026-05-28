@@ -37,6 +37,7 @@ import { recognizePartialByRules } from "./lib/recognition";
 import {
   ApiProfile,
   AppSettings,
+  DEFAULT_API_PROFILE,
   DEFAULT_SETTINGS,
   ModelConnectionStatus,
   CloudReview,
@@ -55,9 +56,12 @@ import {
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
 type FeatureMaturity = "M1" | "M2" | "M3";
 
-const APP_VERSION = "0.9.5";
+const APP_VERSION = "0.9.6";
 const MAKER_CREDIT = "由 Misaki（丛宇航）使用 CodeX 制作";
 const CHANGELOG_ITEMS = [
+  "设置页恢复多 API 配置管理：可添加/删除/切换多个 API 配置，每个配置独立保存 Base URL、Key 和模型名。",
+  "设置页新增「获取模型列表」按钮，自动从 API 读取可用模型并下拉选择。",
+  "收评助手设置新增独立 API 配置选择，可指定使用哪个配置，不选则跟随全局。",
   "收评助手支持三种工作模式切换：混合模式（完整流程）、搜索模式（只搜图）、AI评价模式（只生成文案）。",
   "收评增加评分开关，关闭后搜索更快、不显示相关度分数；新增目标字数滑块（30-100字）和思考模式控制。",
   "设置页 API Key 增加小眼睛，可切换显示/隐藏，保护隐私。",
@@ -852,6 +856,9 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
   const [draft, setDraft] = useState(settings);
   const [section, setSection] = useState<"global" | "rebate" | "video" | "review" | "title" | "compare">("global");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [modelList, setModelList] = useState<{ id: string; name: string }[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelSelectFor, setModelSelectFor] = useState<"text" | "vision" | null>(null);
   useEffect(() => setDraft(settings), [settings]);
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setDraft((prev) => ({ ...prev, [key]: value }));
   const activeProfile = getActiveApiProfile(draft);
@@ -868,6 +875,46 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
     const result = await window.alipayWorkbench.selectTitleKeywordExcel();
     if (!result.canceled && result.paths[0]) set("titleKeywordExcelPath", result.paths[0]);
   };
+
+  const switchProfile = (id: string) => setDraft((prev) => switchActiveApiProfile(prev, id));
+
+  const addProfile = () => {
+    setDraft((prev) => {
+      const profiles = prev.apiProfiles;
+      const nextId = `profile-${Date.now()}`;
+      const nextName = `配置 ${profiles.length + 1}`;
+      const base = getActiveApiProfile(prev);
+      const newProfile: ApiProfile = { ...base, id: nextId, name: nextName };
+      const nextProfiles = [...profiles, newProfile];
+      return normalizeSettings({ ...prev, apiProfiles: nextProfiles, activeApiProfileId: nextId });
+    });
+  };
+
+  const deleteProfile = (id: string) => {
+    setDraft((prev) => {
+      if (prev.apiProfiles.length <= 1) return prev;
+      const nextProfiles = prev.apiProfiles.filter((p) => p.id !== id);
+      let nextActiveId = prev.activeApiProfileId;
+      if (nextActiveId === id) nextActiveId = nextProfiles[0].id;
+      let nextReviewId = prev.reviewApiProfileId;
+      if (nextReviewId === id) nextReviewId = "";
+      return normalizeSettings({ ...prev, apiProfiles: nextProfiles, activeApiProfileId: nextActiveId, reviewApiProfileId: nextReviewId });
+    });
+  };
+
+  const fetchModels = async (kind: "text" | "vision") => {
+    setLoadingModels(true);
+    setModelSelectFor(kind);
+    try {
+      const models = await window.alipayWorkbench.listAvailableModels(draft);
+      setModelList(models);
+    } catch {
+      setModelList([]);
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
   const sections = [
     { key: "global" as const, label: "全局设置", icon: Settings, description: "工具箱名称、API 与 OCR" },
     { key: "rebate" as const, label: "支付宝返款", icon: FileSpreadsheet, description: "导出规则与识别设置" },
@@ -884,10 +931,69 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
           return <button key={item.key} className={clsx("settings-hub-item", section === item.key && "active")} onClick={() => setSection(item.key)}><Icon size={18} /><strong>{item.label}</strong><span>{item.description}</span></button>;
         })}
       </div>
-      {section === "global" && <section className="settings-grid single"><Panel title="全局设置" icon={Settings}><div className="form-stack"><label><span>工具箱名称</span><input value={draft.toolboxName} onChange={(event) => set("toolboxName", event.target.value)} /></label><FontScalePicker value={draft.fontScale} onChange={(value) => set("fontScale", value)} /><label><span>API Base URL</span><input value={activeProfile.apiBaseUrl} onChange={(event) => setProfile({ apiBaseUrl: event.target.value })} /></label><label><span>API Key</span><div className="secret-input"><input type={showApiKey ? "text" : "password"} value={activeProfile.apiKey} onChange={(event) => setProfile({ apiKey: event.target.value })} /><button type="button" onClick={() => setShowApiKey((value) => !value)} title={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label><label><span>文本模型</span><input value={activeProfile.textModel} onChange={(event) => setProfile({ textModel: event.target.value })} /></label><label><span>视觉模型</span><input value={activeProfile.visionModel} onChange={(event) => setProfile({ visionModel: event.target.value })} /></label><div className={clsx("connection-card", modelStatus.state)}><strong>大模型连接：{modelStatusLabel(modelStatus.state)}</strong><span>{modelStatus.detail}</span></div><button className="secondary-action" onClick={() => void onTestModel(draft)}><KeyRound size={17} /> 测试大模型连接</button><div className="hint-card">页面底部会显示：{MAKER_CREDIT}</div></div></Panel></section>}
+      {section === "global" && <section className="settings-grid single"><Panel title="全局设置" icon={Settings}><div className="form-stack">
+        {/* API 配置 Tab 条 */}
+        <div className="api-profile-section">
+          <div className="api-profile-tabs">
+            {draft.apiProfiles.map((profile) => (
+              <div key={profile.id} className={clsx("api-profile-tab", profile.id === activeProfile.id && "active")}>
+                <button type="button" className="api-profile-tab-label" onClick={() => switchProfile(profile.id)}>{profile.name}</button>
+                {draft.apiProfiles.length > 1 && (
+                  <button type="button" className="api-profile-tab-delete" onClick={() => deleteProfile(profile.id)} title="删除此配置"><X size={12} /></button>
+                )}
+              </div>
+            ))}
+            <button type="button" className="api-profile-tab-label" onClick={addProfile} title="新增配置" style={{ fontWeight: 400 }}><Plus size={14} /></button>
+          </div>
+        </div>
+
+        {/* 当前配置名称 */}
+        <label><span>配置名称</span><input value={activeProfile.name} onChange={(event) => setProfile({ name: event.target.value })} /></label>
+
+        <label><span>工具箱名称</span><input value={draft.toolboxName} onChange={(event) => set("toolboxName", event.target.value)} /></label>
+        <FontScalePicker value={draft.fontScale} onChange={(value) => set("fontScale", value)} />
+
+        <label><span>API Base URL</span><input value={activeProfile.apiBaseUrl} onChange={(event) => setProfile({ apiBaseUrl: event.target.value })} /></label>
+
+        <label><span>API Key</span><div className="secret-input"><input type={showApiKey ? "text" : "password"} value={activeProfile.apiKey} onChange={(event) => setProfile({ apiKey: event.target.value })} /><button type="button" onClick={() => setShowApiKey((value) => !value)} title={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+
+        {/* 文本模型 — 带获取模型列表 */}
+        <label><span>文本模型</span><input value={activeProfile.textModel} onChange={(event) => setProfile({ textModel: event.target.value })} /></label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button type="button" className="secondary-action light" onClick={() => void fetchModels("text")} disabled={loadingModels} style={{ flex: "none", padding: "4px 10px", fontSize: "var(--font-xs)" }}>
+            {loadingModels && modelSelectFor === "text" ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> 获取中…</> : "获取模型列表"}
+          </button>
+          {modelSelectFor === "text" && modelList.length > 0 && (
+            <select value={activeProfile.textModel} onChange={(event) => setProfile({ textModel: event.target.value })} style={{ flex: 1 }}>
+              {modelList.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
+            </select>
+          )}
+        </div>
+
+        {/* 视觉模型 — 带获取模型列表 */}
+        <label><span>视觉模型</span><input value={activeProfile.visionModel} onChange={(event) => setProfile({ visionModel: event.target.value })} /></label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button type="button" className="secondary-action light" onClick={() => void fetchModels("vision")} disabled={loadingModels} style={{ flex: "none", padding: "4px 10px", fontSize: "var(--font-xs)" }}>
+            {loadingModels && modelSelectFor === "vision" ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> 获取中…</> : "获取模型列表"}
+          </button>
+          {modelSelectFor === "vision" && modelList.length > 0 && (
+            <select value={activeProfile.visionModel} onChange={(event) => setProfile({ visionModel: event.target.value })} style={{ flex: 1 }}>
+              {modelList.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
+            </select>
+          )}
+        </div>
+
+        {modelSelectFor !== null && modelList.length === 0 && !loadingModels && (
+          <div className="hint-card">未获取到模型列表，请检查 API Base URL 和 API Key 是否正确。</div>
+        )}
+
+        <div className={clsx("connection-card", modelStatus.state)}><strong>大模型连接：{modelStatusLabel(modelStatus.state)}</strong><span>{modelStatus.detail}</span></div>
+        <button className="secondary-action" onClick={() => void onTestModel(draft)}><KeyRound size={17} /> 测试大模型连接</button>
+        <div className="hint-card">页面底部会显示：{MAKER_CREDIT}</div>
+      </div></Panel></section>}
       {section === "rebate" && <section className="settings-grid single"><Panel title="支付宝返款设置" icon={FileSpreadsheet}><div className="form-stack"><label><span>导出文件名中的名字</span><input value={draft.exportNameOwner} onChange={(event) => set("exportNameOwner", event.target.value)} /></label><label><span>固定尾行支付宝账号</span><input value={draft.fixedTailAccount} onChange={(event) => set("fixedTailAccount", event.target.value)} /></label><label><span>固定尾行姓名</span><input value={draft.fixedTailName} onChange={(event) => set("fixedTailName", event.target.value)} /></label><Toggle checked={draft.autoListenClipboard} label="录入页自动读取剪切板" onChange={(value) => set("autoListenClipboard", value)} /><Toggle checked={draft.enhancedCloudValidation} label="启用云端 AI 二次校验识别结果" onChange={(value) => set("enhancedCloudValidation", value)} /></div></Panel></section>}
       {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")}>选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")}>选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()}>指定 FFmpeg</button><div className="hint-card">切片音乐默认使用内置 CC0 音乐。{MAKER_CREDIT}</div></div></Panel></section>}
-      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")}>选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><Toggle checked={draft.reviewScoringEnabled} label="开启相关性评分系统（关闭可提升搜索性能）" onChange={(value) => set("reviewScoringEnabled", value)} /><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>思考模式</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])}><option value="off">关闭</option><option value="fast">快速</option><option value="balanced">均衡</option><option value="deep">深度</option></select></label><label><span>思考程度</span><select value={draft.reviewThinkingEffort} onChange={(event) => set("reviewThinkingEffort", event.target.value as AppSettings["reviewThinkingEffort"])}><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label><span>云端更新源 URL</span><input value={draft.updateFeedUrl} onChange={(event) => set("updateFeedUrl", event.target.value)} /></label></div></Panel></section>}
+      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")}>选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><Toggle checked={draft.reviewScoringEnabled} label="开启相关性评分系统（关闭可提升搜索性能）" onChange={(value) => set("reviewScoringEnabled", value)} /><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>思考模式</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])}><option value="off">关闭</option><option value="fast">快速</option><option value="balanced">均衡</option><option value="deep">深度</option></select></label><label><span>思考程度</span><select value={draft.reviewThinkingEffort} onChange={(event) => set("reviewThinkingEffort", event.target.value as AppSettings["reviewThinkingEffort"])}><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label><span>云端更新源 URL</span><input value={draft.updateFeedUrl} onChange={(event) => set("updateFeedUrl", event.target.value)} /></label></div></Panel></section>}
       {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()}><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div><div className="hint-card">{MAKER_CREDIT}</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><button className="primary" onClick={() => onSave(normalizeSettings(draft))}><Check size={18} /> 保存设置</button></div>
