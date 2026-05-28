@@ -93,6 +93,11 @@ if (!window.alipayWorkbench) {
     startDragFiles: async () => undefined,
     enhanceTitlePool: async () => ({ ok: false, selected: [], suggested: [], reason: "浏览器预览模式不支持 AI 选词" }),
     generateReviewCopy: async () => ({ copies: [] }),
+    recognizeText: async () => {
+      throw new Error("浏览器预览模式不支持后台识别，请使用桌面端。");
+    },
+    reviewRecognitionCloud: async () => ({ status: "error", reason: "浏览器预览模式不支持云端复核，请使用桌面端。" }),
+    testModelConnection: async () => ({ state: "failed", detail: "浏览器预览模式不支持后台连接测试，请使用桌面端。" }),
     listAvailableModels: async () => [],
     testEverythingConnection: async () => ({ available: false, detail: "浏览器预览模式不支持 Everything 测试" }),
     checkForUpdates: async () => ({ state: "idle", detail: "浏览器预览模式不检查更新" }),

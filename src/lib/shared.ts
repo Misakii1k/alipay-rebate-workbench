@@ -58,6 +58,8 @@ export interface AppSettings {
   reviewApiProfileId: string;
   reviewCustomPrompt: string;
   reviewSavedCopies?: string[];
+  reviewFavoriteQueries?: string[];
+  reviewGenerateHotkey: string;
   reviewWorkspaceMode: ReviewWorkspaceMode;
   reviewScoringEnabled: boolean;
   reviewTargetLength: number;
@@ -70,6 +72,7 @@ export interface AppSettings {
   fontScale: FontScale;
   lastSeenChangelogVersion?: string;
   everythingEsPath: string;
+  sidebarCollapsed: boolean;
 }
 
 export interface VideoCandidate {
@@ -150,6 +153,7 @@ export interface ReviewSearchResult {
   kind: "image" | "folder";
   score: number;
   reason: string;
+  mtimeMs?: number;
   thumbnailDataUrl?: string;
   children?: ReviewSearchResult[];
 }
@@ -456,6 +460,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewApiProfileId: "",
   reviewCustomPrompt: "",
   reviewSavedCopies: [],
+  reviewFavoriteQueries: [],
+  reviewGenerateHotkey: "Ctrl+Enter",
   reviewWorkspaceMode: "mixed",
   reviewScoringEnabled: true,
   reviewTargetLength: 80,
@@ -467,7 +473,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   compareShowPassedRowsAfterVerify: true,
   fontScale: "normal",
   lastSeenChangelogVersion: "",
-  everythingEsPath: ""
+  everythingEsPath: "",
+  sidebarCollapsed: false
 };
 
 export const DEFAULT_WORKBENCH_STATE: WorkbenchState = {
@@ -564,6 +571,8 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     reviewApiProfileId: String(raw.reviewApiProfileId ?? ""),
     reviewCustomPrompt: String(raw.reviewCustomPrompt ?? ""),
     reviewSavedCopies: Array.isArray(raw.reviewSavedCopies) ? raw.reviewSavedCopies.filter((x: unknown) => typeof x === "string").slice(0, 200) : [],
+    reviewFavoriteQueries: Array.isArray(raw.reviewFavoriteQueries) ? raw.reviewFavoriteQueries.filter((x: unknown) => typeof x === "string").slice(0, 100) : [],
+    reviewGenerateHotkey: String(raw.reviewGenerateHotkey ?? DEFAULT_SETTINGS.reviewGenerateHotkey),
     reviewWorkspaceMode: normalizeReviewWorkspaceMode(raw.reviewWorkspaceMode),
     reviewScoringEnabled: Boolean(raw.reviewScoringEnabled ?? DEFAULT_SETTINGS.reviewScoringEnabled),
     reviewTargetLength: clampNumber(raw.reviewTargetLength, 30, 100, DEFAULT_SETTINGS.reviewTargetLength),
@@ -575,7 +584,8 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     compareShowPassedRowsAfterVerify: Boolean(raw.compareShowPassedRowsAfterVerify ?? DEFAULT_SETTINGS.compareShowPassedRowsAfterVerify),
     fontScale: normalizeFontScale(raw.fontScale),
     lastSeenChangelogVersion: String(raw.lastSeenChangelogVersion ?? ""),
-    everythingEsPath: String(raw.everythingEsPath ?? "")
+    everythingEsPath: String(raw.everythingEsPath ?? ""),
+    sidebarCollapsed: Boolean(raw.sidebarCollapsed ?? DEFAULT_SETTINGS.sidebarCollapsed)
   };
 }
 

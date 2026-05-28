@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Check, ChevronDown, Copy, Edit3, FolderOpen, Hammer, Image as ImageIcon,
-  Loader2, RefreshCw, RotateCcw, Search, Sparkles, Star, StarOff, Trash2, WandSparkles, X
+  ArrowUp, Check, ChevronDown, Copy, Edit3, FolderOpen, Hammer, Image as ImageIcon,
+  Keyboard, Loader2, RefreshCw, RotateCcw, Search, Sparkles, Star, StarOff, Trash2, WandSparkles, X
 } from "lucide-react";
 import clsx from "clsx";
 import type { AppSettings, ReviewGenerationOptions, ReviewSearchResult, ReviewThinkingEffort, ReviewThinkingMode, ReviewWorkspaceMode } from "./lib/shared";
@@ -12,6 +12,8 @@ const REVIEW_LOAD_STEP = 24;
 const REVIEW_THUMBNAIL_BATCH = 18;
 const RECENT_QUERIES_KEY = "review-recent-queries";
 const MAX_RECENT_QUERIES = 8;
+type ReviewSortMode = "relevance" | "name-asc" | "name-desc" | "time-desc" | "time-asc";
+type ReviewFilterMode = "all" | "image" | "folder" | "selected";
 
 interface ReviewSessionState {
   query: string;
@@ -70,12 +72,18 @@ export function ReviewAssistant({
     const profile = getReviewApiProfile(settings);
     return profile.textModel;
   });
+  const [sortMode, setSortMode] = useState<ReviewSortMode>(() => settings.reviewScoringEnabled ? "relevance" : "time-desc");
+  const [filterMode, setFilterMode] = useState<ReviewFilterMode>("all");
+  const [isPointerSelecting, setIsPointerSelecting] = useState(false);
+  const pointerSelectModeRef = useRef<"select" | "deselect">("select");
+  const [showBackTop, setShowBackTop] = useState(false);
   const [recentQueries, setRecentQueries] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem(RECENT_QUERIES_KEY);
       return raw ? (JSON.parse(raw) as string[]).slice(0, MAX_RECENT_QUERIES) : [];
     } catch { return []; }
   });
+  const favoriteQueries = useMemo(() => settings.reviewFavoriteQueries ?? [], [settings.reviewFavoriteQueries]);
   const [options, setOptions] = useState({
     emojiLevel: settings.reviewEmojiLevel,
     professionalLevel: settings.reviewProfessionalLevel,
@@ -91,13 +99,33 @@ export function ReviewAssistant({
   const loadMoreTimerRef = useRef<number>(0);
   const copyListRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
 
-  const visibleResults = useMemo(() => results.slice(0, visibleCount), [results, visibleCount]);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const sortedResults = useMemo(() => {
+    const collator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
+    const next = [...results];
+    if (sortMode === "relevance") next.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    if (sortMode === "name-asc") next.sort((a, b) => collator.compare(a.name, b.name));
+    if (sortMode === "name-desc") next.sort((a, b) => collator.compare(b.name, a.name));
+    if (sortMode === "time-desc") next.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
+    if (sortMode === "time-asc") next.sort((a, b) => (a.mtimeMs ?? 0) - (b.mtimeMs ?? 0));
+    return next;
+  }, [results, sortMode]);
   const selectablePaths = useCallback((item: ReviewSearchResult) => {
-    if (item.kind === "folder" && item.children?.length) return item.children.map((child) => child.path);
     return [item.path];
   }, []);
+  const folderChildPaths = useCallback((item: ReviewSearchResult) => item.kind === "folder" && item.children?.length ? item.children.map((child) => child.path) : [], []);
+  const filteredResults = useMemo(() => {
+    if (filterMode === "all") return sortedResults;
+    if (filterMode === "image") return sortedResults.filter((item) => item.kind === "image");
+    if (filterMode === "folder") return sortedResults.filter((item) => item.kind === "folder");
+    return sortedResults.filter((item) => {
+      const paths = item.kind === "folder" ? [item.path, ...folderChildPaths(item)] : [item.path];
+      return paths.some((path) => selectedSet.has(path));
+    });
+  }, [filterMode, folderChildPaths, selectedSet, sortedResults]);
+  const visibleResults = useMemo(() => filteredResults.slice(0, visibleCount), [filteredResults, visibleCount]);
   const visiblePathGroups = useMemo(() => {
     return new Map(visibleResults.map((item) => [item.path, selectablePaths(item)]));
   }, [selectablePaths, visibleResults]);
@@ -131,6 +159,35 @@ export function ReviewAssistant({
   useEffect(() => {
     reviewSessionState = { query, searched, results, visibleCount, selected, preview, copies, batchSeed };
   }, [batchSeed, copies, preview, query, results, searched, selected, visibleCount]);
+
+  useEffect(() => {
+    const onScroll = () => setShowBackTop(window.scrollY > 420);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    const onPointerUp = () => setIsPointerSelecting(false);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!matchesHotkey(event, settings.reviewGenerateHotkey || "Ctrl+Enter")) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("textarea, input, select") && event.key !== "Enter") return;
+      event.preventDefault();
+      void generate();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   useEffect(() => {
     const off = window.alipayWorkbench.onReviewScanProgress?.((progress) => {
@@ -244,6 +301,8 @@ export function ReviewAssistant({
       setResults(found);
       setSelected([]);
       setVisibleCount(REVIEW_INITIAL_VISIBLE);
+      setSortMode(settings.reviewScoringEnabled ? "relevance" : "time-desc");
+      setFilterMode("all");
       setLoadingMore(false);
       setPreview(found[0] ?? null);
       recordRecentQuery(q);
@@ -281,6 +340,33 @@ export function ReviewAssistant({
       const allSelected = paths.every((path) => prevSet.has(path));
       return allSelected ? prev.filter((path) => !paths.includes(path)) : [...new Set([...prev, ...paths])];
     });
+  }
+
+  function applyPointerSelection(item: ReviewSearchResult, mode = pointerSelectModeRef.current) {
+    const paths = selectablePaths(item);
+    setSelected((prev) => {
+      const prevSet = new Set(prev);
+      if (mode === "select") paths.forEach((path) => prevSet.add(path));
+      else paths.forEach((path) => prevSet.delete(path));
+      return [...prevSet];
+    });
+    setPreview(item);
+  }
+
+  function beginPointerSelection(item: ReviewSearchResult) {
+    const paths = selectablePaths(item);
+    const allSelected = paths.every((path) => selectedSet.has(path));
+    pointerSelectModeRef.current = allSelected ? "deselect" : "select";
+    setIsPointerSelecting(true);
+    applyPointerSelection(item, allSelected ? "deselect" : "select");
+  }
+
+  function selectFolderChildren(item: ReviewSearchResult) {
+    const paths = folderChildPaths(item);
+    if (!paths.length) return;
+    setSelected((prev) => [...new Set([...prev, ...paths])]);
+    setPreview(item);
+    showToast(`已选中文件夹内 ${paths.length} 张图片。`);
   }
 
   function selectAllVisible() {
@@ -323,6 +409,7 @@ export function ReviewAssistant({
     const seed = nextBatch ? batchSeed + 1 : batchSeed;
     setBatchSeed(seed);
     setGenerating(true);
+    requestAnimationFrame(() => copyListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
     try {
       const payload: ReviewGenerationOptions = {
         query,
@@ -400,23 +487,47 @@ export function ReviewAssistant({
     await onSaveSettings({ ...settings, reviewSavedCopies: next });
   }
 
+  async function toggleFavoriteQuery(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const isFavorite = favoriteQueries.includes(trimmed);
+    const next = isFavorite ? favoriteQueries.filter((item) => item !== trimmed) : [trimmed, ...favoriteQueries.filter((item) => item !== trimmed)].slice(0, 100);
+    await onSaveSettings({ ...settings, reviewFavoriteQueries: next });
+    showToast(isFavorite ? "已取消搜索收藏。" : "已加入搜索收藏。");
+  }
+
+  async function saveHotkey(value: string) {
+    const normalized = normalizeHotkey(value);
+    if (!normalized) {
+      showToast("快捷键格式无效，例如 Ctrl+Enter 或 Alt+G。");
+      return;
+    }
+    await onSaveSettings({ ...settings, reviewGenerateHotkey: normalized });
+  }
+
   return (
     <section className={clsx("review-assistant review-v2", searched && "searched")}>
+      <div ref={topRef} className="review-v2-top-anchor" />
       {showModeSelect ? (
         <ModeSelectPage mode={mode} onSelect={(nextMode) => { setModeState(nextMode); setShowModeSelect(false); onSaveSettings({ ...settings, reviewWorkspaceMode: nextMode }); }} />
       ) : (
         <>
-          <ReviewHero
+          <ReviewModeTabs
             mode={mode}
             onModeChange={(nextMode) => void setMode(nextMode)}
             scoringEnabled={settings.reviewScoringEnabled}
             onToggleScoring={(enabled) => void toggleScoring(enabled)}
+          />
+          <ReviewHero
+            mode={mode}
             query={query}
             setQuery={setQuery}
             onSearch={() => void searchAssets()}
             searching={searching}
             recentQueries={recentQueries}
+            favoriteQueries={favoriteQueries}
             onPickRecent={(q) => void searchAssets(q)}
+            onToggleFavorite={(q) => void toggleFavoriteQuery(q)}
             onPickRoot={pickRoot}
             rootLabel={rootLabel}
             onRebuildIndex={() => void rebuildIndex()}
@@ -438,6 +549,11 @@ export function ReviewAssistant({
               onSelectAll={selectAllVisible}
               onClear={() => setSelected([])}
               searching={searching}
+              sortMode={sortMode}
+              onSortChange={setSortMode}
+              filterMode={filterMode}
+              onFilterChange={setFilterMode}
+              scoringEnabled={settings.reviewScoringEnabled}
             />
 
             {results.length === 0 && !searching && <ReviewEmptyState query={query} />}
@@ -447,14 +563,17 @@ export function ReviewAssistant({
               scoringEnabled={settings.reviewScoringEnabled}
               selectedKeys={visibleSelectedKeys}
               onToggle={(item) => { toggle(item); setPreview(item); }}
+              onPointerSelect={beginPointerSelection}
+              onPointerEnterSelect={(item) => { if (isPointerSelecting) applyPointerSelection(item); }}
+              onSelectFolderChildren={selectFolderChildren}
               onPreview={setPreview}
               dragPathsFor={dragPathsFor}
             />
 
-            {results.length > visibleCount && (
+            {filteredResults.length > visibleCount && (
               <button className="review-v2-load-more" onClick={loadMoreResults} disabled={loadingMore}>
                 {loadingMore ? <Loader2 className="spin" size={16} /> : null}
-                加载更多（剩余 {results.length - visibleCount} 个）
+                加载更多（剩余 {filteredResults.length - visibleCount} 个）
               </button>
             )}
           </div>
@@ -485,6 +604,8 @@ export function ReviewAssistant({
           hasCopies={copies.length > 0}
           canGenerate={selected.length > 0 || mode === "ai"}
           onClearContext={clearContext}
+          hotkey={settings.reviewGenerateHotkey || "Ctrl+Enter"}
+          onSaveHotkey={(value) => void saveHotkey(value)}
         />
       )}
 
@@ -514,9 +635,48 @@ export function ReviewAssistant({
           onRemove={(text) => void removeSavedCopy(text)}
         />
       )}
+      {showBackTop && (
+        <button className="review-v2-back-top" onClick={() => topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} title="回到顶部" aria-label="回到顶部">
+          <ArrowUp size={16} />
+        </button>
+      )}
         </>
       )}
     </section>
+  );
+}
+
+function ReviewModeTabs({ mode, onModeChange, scoringEnabled, onToggleScoring }: { mode: ReviewWorkspaceMode; onModeChange: (mode: ReviewWorkspaceMode) => void; scoringEnabled: boolean; onToggleScoring: (enabled: boolean) => void }) {
+  const modeOptions: Array<{ key: ReviewWorkspaceMode; label: string; icon: typeof Search }> = [
+    { key: "search", label: "搜索模式", icon: Search },
+    { key: "ai", label: "AI评价", icon: WandSparkles },
+    { key: "mixed", label: "混合模式", icon: Sparkles }
+  ];
+  return (
+    <div className="review-v2-mode-bar">
+      <div className="review-v2-mode-switch" role="tablist" aria-label="收评助手模式">
+        {modeOptions.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button key={item.key} type="button" role="tab" aria-selected={mode === item.key} className={clsx(mode === item.key && "active")} onClick={() => onModeChange(item.key)}>
+              <Icon size={14} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {mode !== "ai" && (
+        <div className="review-v2-score-toggle">
+          <button type="button" className={clsx("review-v2-score-switch", scoringEnabled && "on")} role="switch" aria-checked={scoringEnabled} onClick={() => onToggleScoring(!scoringEnabled)} title={scoringEnabled ? "相关性评分已开启" : "相关性评分已关闭"}>
+            <i className="review-v2-score-switch-thumb" />
+          </button>
+          <div className="review-v2-score-labels">
+            <span>相关性评分</span>
+            <em>{scoringEnabled ? "优先高相关" : "关闭省性能"}</em>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -538,7 +698,7 @@ function ModeSelectPage({ mode, onSelect }: { mode: ReviewWorkspaceMode; onSelec
       </div>
       <div className="review-mode-select-cards">
         {(Object.entries(modeConfig) as Array<[ReviewWorkspaceMode, typeof modeConfig.search]>).map(([key, config]) => (
-          <button key={key} className={clsx("review-mode-select-card", mode === key && "active")} onClick={() => { if (mode !== key) onSelect(key); }}>
+          <button key={key} className={clsx("review-mode-select-card", mode === key && "active")} onClick={() => onSelect(key)}>
             <div className="review-mode-card-illustration">
               <config.icon size={48} />
             </div>
@@ -577,66 +737,28 @@ function ModeSelectPage({ mode, onSelect }: { mode: ReviewWorkspaceMode; onSelec
 }
 
 function ReviewHero({
-  mode, onModeChange, scoringEnabled, onToggleScoring,
-  query, setQuery, onSearch, searching, recentQueries, onPickRecent, onPickRoot, rootLabel, onRebuildIndex, inputRef
+  mode,
+  query, setQuery, onSearch, searching, recentQueries, favoriteQueries, onPickRecent, onToggleFavorite, onPickRoot, rootLabel, onRebuildIndex, inputRef
 }: {
   mode: ReviewWorkspaceMode;
-  onModeChange: (mode: ReviewWorkspaceMode) => void;
-  scoringEnabled: boolean;
-  onToggleScoring: (enabled: boolean) => void;
   query: string;
   setQuery: (v: string) => void;
   onSearch: () => void;
   searching: boolean;
   recentQueries: string[];
+  favoriteQueries: string[];
   onPickRecent: (q: string) => void;
+  onToggleFavorite: (q: string) => void;
   onPickRoot: () => void;
   rootLabel: string;
   onRebuildIndex: () => void;
   inputRef: React.RefObject<HTMLInputElement>;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const modeLabels: Record<ReviewWorkspaceMode, { label: string; emoji: string }> = {
-    mixed: { label: "混合模式", emoji: "🔀" },
-    search: { label: "搜索模式", emoji: "🔍" },
-    ai: { label: "AI评价", emoji: "🤖" }
-  };
-
   return (
     <div className="review-v2-hero">
       <div className="review-v2-hero-head">
         <Sparkles size={22} />
         <strong>收评助手</strong>
-        <em>按商品名检索参考图，AI 生成更自然的买家好评文案</em>
-        <div className="review-v2-mode-switch">
-            <div className="review-v2-mode-dropdown" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setTimeout(() => setMenuOpen(false), 120); }} tabIndex={-1}>
-              <button className="review-v2-mode-dropdown-btn" onClick={() => setMenuOpen(!menuOpen)}>
-              {modeLabels[mode].emoji} {modeLabels[mode].label}
-              <ChevronDown size={14} className={clsx("review-v2-chev", menuOpen && "open")} />
-            </button>
-            {menuOpen && (
-              <div className="review-v2-mode-dropdown-menu">
-                {(Object.entries(modeLabels) as Array<[ReviewWorkspaceMode, typeof modeLabels.mixed]>).map(([key, item]) => (
-                  <button key={key} className={clsx(mode === key && "active")} onClick={() => { onModeChange(key); setMenuOpen(false); }}>
-                    <span className="review-v2-mode-menu-emoji">{item.emoji}</span>
-                    <strong>{item.label}</strong>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          {mode !== "ai" && (
-            <div className="review-v2-score-toggle">
-              <button type="button" className={clsx("review-v2-score-switch", scoringEnabled && "on")} role="switch" aria-checked={scoringEnabled} onClick={() => onToggleScoring(!scoringEnabled)} title={scoringEnabled ? "相关性评分已开启" : "相关性评分已关闭"}>
-                <i className="review-v2-score-switch-thumb" />
-              </button>
-              <div className="review-v2-score-labels">
-                <span>相关性评分</span>
-                <em>{scoringEnabled ? "优先高相关" : "关闭省性能"}</em>
-              </div>
-            </div>
-          )}
-        </div>
       </div>
 
       {mode !== "ai" && (
@@ -653,10 +775,35 @@ function ReviewHero({
         </div>
       )}
 
-      {recentQueries.length > 0 && mode !== "ai" && (
-        <div className="review-v2-recent">
-          <span className="review-v2-recent-label">最近搜索</span>
-          {recentQueries.map((q) => <button key={q} className="review-v2-recent-chip" onClick={() => onPickRecent(q)}>{q}</button>)}
+      {mode !== "ai" && (recentQueries.length > 0 || favoriteQueries.length > 0) && (
+        <div className="review-v2-query-memory">
+          {favoriteQueries.length > 0 && (
+            <div className="review-v2-recent">
+              <span className="review-v2-recent-label">搜索收藏</span>
+              {favoriteQueries.map((q) => (
+                <span key={q} className="review-v2-memory-chip favorite">
+                  <button onClick={() => onPickRecent(q)}>{q}</button>
+                  <button onClick={() => onToggleFavorite(q)} title="取消收藏"><Star size={12} /></button>
+                </span>
+              ))}
+            </div>
+          )}
+          {recentQueries.length > 0 && (
+            <div className="review-v2-recent">
+              <span className="review-v2-recent-label">最近搜索</span>
+              {recentQueries.map((q) => {
+                const starred = favoriteQueries.includes(q);
+                return (
+                  <span key={q} className="review-v2-memory-chip">
+                    <button onClick={() => onPickRecent(q)}>{q}</button>
+                    <button className={clsx(starred && "starred")} onClick={() => onToggleFavorite(q)} title={starred ? "取消收藏" : "收藏搜索"}>
+                      {starred ? <Star size={12} /> : <StarOff size={12} />}
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -677,13 +824,27 @@ function ReviewScanProgressBar({ progress, searching }: { progress: ScanProgress
   );
 }
 
-function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCount, onSelectAll, onClear, searching }: { selectedImages: number; selectedCards: number; totalResults: number; visibleCount: number; onSelectAll: () => void; onClear: () => void; searching: boolean; }) {
+function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCount, onSelectAll, onClear, searching, sortMode, onSortChange, filterMode, onFilterChange, scoringEnabled }: { selectedImages: number; selectedCards: number; totalResults: number; visibleCount: number; onSelectAll: () => void; onClear: () => void; searching: boolean; sortMode: ReviewSortMode; onSortChange: (mode: ReviewSortMode) => void; filterMode: ReviewFilterMode; onFilterChange: (mode: ReviewFilterMode) => void; scoringEnabled: boolean; }) {
   return (
     <div className="review-v2-toolbar">
       <span className="review-v2-toolbar-status">{searching ? "正在检索" : totalResults > 0 ? "按匹配度展示 " + visibleCount + " / " + totalResults : "无结果"}</span>
       <div className="review-v2-toolbar-actions">
+        <select className="review-v2-toolbar-select" value={filterMode} onChange={(event) => onFilterChange(event.target.value as ReviewFilterMode)}>
+          <option value="all">全部</option>
+          <option value="image">图片</option>
+          <option value="folder">文件夹</option>
+          <option value="selected">已选</option>
+        </select>
+        <select className="review-v2-toolbar-select" value={sortMode} onChange={(event) => onSortChange(event.target.value as ReviewSortMode)}>
+          {scoringEnabled && <option value="relevance">相关度</option>}
+          <option value="time-desc">时间新到旧</option>
+          <option value="time-asc">时间旧到新</option>
+          <option value="name-asc">文件名 A-Z</option>
+          <option value="name-desc">文件名 Z-A</option>
+        </select>
         {selectedImages > 0 && (<><span className="review-v2-selected-chip review-v2-selected-chip-readable"><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span><span className="review-v2-drag-hint">拖拽缩略图即可同时移动全部所选</span><button className="review-v2-toolbar-btn" onClick={onClear}>清空选中</button></>)}
-        {totalResults > 0 && selectedImages === 0 && <button className="review-v2-toolbar-btn" onClick={onSelectAll}>全选可见</button>}
+        {selectedImages > 0 && <button className="review-v2-toolbar-btn" onClick={onClear}>取消全选</button>}
+        {totalResults > 0 && <button className="review-v2-toolbar-btn" onClick={onSelectAll}>全选可见</button>}
       </div>
     </div>
   );
@@ -693,14 +854,14 @@ function ReviewEmptyState({ query }: { query: string }) {
   return <div className="review-v2-empty"><ImageIcon size={48} /><strong>{query ? "没有找到“" + query + "”相关图片" : "未搜索"}</strong><span>试试换个关键词，或检查图片根目录是否正确。</span></div>;
 }
 
-function ReviewResultGrid({ items, scoringEnabled = true, selectedKeys, onToggle, onPreview, dragPathsFor }: { items: ReviewSearchResult[]; scoringEnabled?: boolean; selectedKeys: Set<string>; onToggle: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; }) {
+function ReviewResultGrid({ items, scoringEnabled = true, selectedKeys, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onPreview, dragPathsFor }: { items: ReviewSearchResult[]; scoringEnabled?: boolean; selectedKeys: Set<string>; onToggle: (item: ReviewSearchResult) => void; onPointerSelect: (item: ReviewSearchResult) => void; onPointerEnterSelect: (item: ReviewSearchResult) => void; onSelectFolderChildren: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; }) {
   return (
     <div className="review-v2-grid">
       {items.map((item) => {
         const isFolder = item.kind === "folder";
         const isSelected = selectedKeys.has(item.path);
         return (
-          <button key={item.path} className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
+          <button key={item.path} className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
             <div className="review-v2-thumb">
               {item.thumbnailDataUrl ? <img src={item.thumbnailDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
               {isFolder && item.children && item.children.length > 1 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {item.children.length}</span>}
@@ -708,6 +869,7 @@ function ReviewResultGrid({ items, scoringEnabled = true, selectedKeys, onToggle
               {isSelected && <span className="review-v2-check"><Check size={14} /></span>}
             </div>
             <strong className="review-v2-name">{item.name}</strong><em className="review-v2-reason">{item.reason}</em>
+            {isFolder && item.children?.length ? <span className="review-v2-folder-select" onClick={(event) => { event.stopPropagation(); onSelectFolderChildren(item); }}>选中整个文件夹</span> : null}
           </button>
         );
       })}
@@ -728,7 +890,7 @@ function ReviewPreviewPanel({ preview, selectedImages, selectedCards, scoringEna
   );
 }
 
-function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onGenerate, onNextBatch, generating, hasCopies, canGenerate, onClearContext }: { query: string; setQuery: (value: string) => void; options: { emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }; setOptions: React.Dispatch<React.SetStateAction<{ emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onGenerate: () => void; onNextBatch: () => void; generating: boolean; hasCopies: boolean; canGenerate: boolean; onClearContext: () => void; }) {
+function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onGenerate, onNextBatch, generating, hasCopies, canGenerate, onClearContext, hotkey, onSaveHotkey }: { query: string; setQuery: (value: string) => void; options: { emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }; setOptions: React.Dispatch<React.SetStateAction<{ emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onGenerate: () => void; onNextBatch: () => void; generating: boolean; hasCopies: boolean; canGenerate: boolean; onClearContext: () => void; hotkey: string; onSaveHotkey: (value: string) => void; }) {
   return (
     <section className="review-v2-ai-panel">
       <div className="review-v2-ai-head"><WandSparkles size={18} /><strong>AI 生成好评</strong><span className="review-v2-ai-tag">高级功能</span><div className="review-v2-ai-model"><select value={selectedModelId} onChange={(e) => onModelChange(e.target.value)}>{availableModels.length === 0 && <option value={selectedModelId}>{selectedModelId || "未选择模型"}</option>}{availableModels.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select><button className="review-v2-ai-refresh" onClick={onLoadModels} disabled={loadingModels} title="刷新可用模型">{loadingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}</button></div></div>
@@ -743,6 +905,7 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
         <label className="review-v2-toggle"><span>性价比</span><input type="checkbox" checked={options.mentionValue} onChange={(e) => setOptions((p) => ({ ...p, mentionValue: e.target.checked }))} /><span className="review-v2-toggle-track"><span className="review-v2-toggle-thumb" /></span></label>
       </div>
       <div className="review-v2-thinking-row"><label><span>思考模式</span><select value={options.thinkingMode} onChange={(e) => setOptions((p) => ({ ...p, thinkingMode: e.target.value as ReviewThinkingMode }))}><option value="off">关闭</option><option value="fast">快速</option><option value="balanced">均衡</option><option value="deep">深度</option></select></label><label><span>思考程度</span><select value={options.thinkingEffort} onChange={(e) => setOptions((p) => ({ ...p, thinkingEffort: e.target.value as ReviewThinkingEffort }))}><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label></div>
+      <label className="review-v2-desc review-v2-hotkey"><span><Keyboard size={13} /> 生成快捷键</span><input value={hotkey} onChange={(e) => onSaveHotkey(e.target.value)} placeholder="Ctrl+Enter" /></label>
       <label className="review-v2-desc"><span>商品描述补充</span><textarea value={options.productDescription} onChange={(e) => setOptions((p) => ({ ...p, productDescription: e.target.value }))} placeholder="补充商品卖点，让好评更贴合（可选）" /></label>
       <button className="review-v2-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}><ChevronDown size={14} className={clsx("review-v2-chev", advancedOpen && "open")} />高级：自定义提示词</button>
       {advancedOpen && <label className="review-v2-desc"><span>自定义提示词（追加在系统指令后）</span><textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} onBlur={onSaveCustomPrompt} placeholder="例如：多用口语化表达，不要使用书面语" /></label>}
@@ -773,4 +936,36 @@ function compactPath(value: string) {
   const parts = value.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 3) return value;
   return parts[0] + "\\...\\" + parts.slice(-2).join("\\");
+}
+
+function normalizeHotkey(value: string) {
+  const parts = value.split("+").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return "";
+  const key = parts.at(-1);
+  if (!key) return "";
+  const modifiers = new Set(parts.slice(0, -1).map((part) => part.toLowerCase()));
+  const normalizedModifiers: string[] = [];
+  if (modifiers.has("ctrl") || modifiers.has("control")) normalizedModifiers.push("Ctrl");
+  if (modifiers.has("alt") || modifiers.has("option")) normalizedModifiers.push("Alt");
+  if (modifiers.has("shift")) normalizedModifiers.push("Shift");
+  if (modifiers.has("meta") || modifiers.has("cmd") || modifiers.has("command")) normalizedModifiers.push("Meta");
+  const normalizedKey = key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1);
+  if (!normalizedModifiers.length && normalizedKey !== "Enter") return "";
+  return [...normalizedModifiers, normalizedKey].join("+");
+}
+
+function matchesHotkey(event: KeyboardEvent, hotkey: string) {
+  const normalized = normalizeHotkey(hotkey);
+  if (!normalized) return false;
+  const parts = normalized.split("+");
+  const key = parts.at(-1)?.toLowerCase();
+  const wants = new Set(parts.slice(0, -1));
+  const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key.toLowerCase();
+  return (
+    eventKey === key &&
+    event.ctrlKey === wants.has("Ctrl") &&
+    event.altKey === wants.has("Alt") &&
+    event.shiftKey === wants.has("Shift") &&
+    event.metaKey === wants.has("Meta")
+  );
 }

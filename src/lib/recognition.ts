@@ -183,6 +183,17 @@ function normalizeModelResult(value: Record<string, unknown>, source: Recognitio
   };
 }
 
+function normalizeBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "1", "一致", "正确"].includes(normalized)) return true;
+    if (["false", "no", "0", "不一致", "错误"].includes(normalized)) return false;
+  }
+  if (typeof value === "number") return value === 1;
+  return false;
+}
+
 export async function recognizeText(text: string, settings: AppSettings): Promise<RecognitionResult> {
   const rules = recognizeByRules(text);
   if (rules) return rules;
@@ -224,12 +235,16 @@ export async function reviewRecognitionCloud(
     }
   ]);
 
-  const valid = Boolean(result.valid);
+  const cloudAccount = String(result.account ?? "").trim();
+  const cloudName = String(result.name ?? "").trim();
+  const accountMatches = !cloudAccount || cloudAccount === localResult.account;
+  const nameMatches = !cloudName || cloudName === localResult.name;
+  const valid = normalizeBoolean(result.valid) && accountMatches && nameMatches;
   return {
     status: valid ? "passed" : "warning",
     valid,
-    account: String(result.account ?? "").trim(),
-    name: String(result.name ?? "").trim(),
+    account: cloudAccount,
+    name: cloudName,
     confidence: Number(result.confidence ?? 0),
     reason: String(result.reason ?? "云端增强校验完成")
   };

@@ -5,6 +5,9 @@ import type {
   ExportPayload,
   ExportResult,
   FfmpegStatus,
+  CloudReview,
+  ModelConnectionStatus,
+  RecognitionResult,
   ReviewGenerationOptions,
   ReviewGenerationResult,
   ReviewSearchResult,
@@ -73,6 +76,15 @@ const api = {
   enhanceTitlePool: (settings: AppSettings, payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }): Promise<{ ok: boolean; selected: string[]; suggested: string[]; reason?: string }> => ipcRenderer.invoke("title:enhancePool", settings, payload),
   generateReviewCopy: (settings: AppSettings, options: ReviewGenerationOptions): Promise<ReviewGenerationResult> =>
     ipcRenderer.invoke("review:generateCopy", settings, options),
+  recognizeText: (text: string, settings: AppSettings): Promise<RecognitionResult> =>
+    ipcRenderer.invoke("recognition:recognizeText", text, settings),
+  reviewRecognitionCloud: (
+    rawText: string,
+    localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">,
+    settings: AppSettings
+  ): Promise<CloudReview> => ipcRenderer.invoke("recognition:cloudReview", rawText, localResult, settings),
+  testModelConnection: (settings: AppSettings): Promise<ModelConnectionStatus> =>
+    ipcRenderer.invoke("ai:testConnection", settings),
   listAvailableModels: (settings: AppSettings): Promise<{ id: string; name: string }[]> =>
     ipcRenderer.invoke("ai:listModels", settings),
   testEverythingConnection: (settings: AppSettings): Promise<{ available: boolean; detail: string }> =>

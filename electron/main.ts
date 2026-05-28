@@ -17,6 +17,9 @@ import {
   ExportPayload,
   ExportResult,
   FfmpegStatus,
+  CloudReview,
+  ModelConnectionStatus,
+  RecognitionResult,
   ReviewGenerationOptions,
   ReviewGenerationResult,
   ReviewSearchResult,
@@ -39,6 +42,7 @@ import {
   normalizeSettings
 } from "../src/lib/shared";
 import { analyzeTitleScore, containsThirdPartyBrand, generateTitleScore, previewTokenPool, sanitizeTitleKeyword } from "../src/lib/titleOptimizer";
+import { CLOUD_REVIEW_PROMPT, TEXT_RECOGNITION_PROMPT, recognizeByRules, recognizePartialByRules } from "../src/lib/recognition";
 
 let mainWindow: BrowserWindow | null = null;
 let cpuThreads = Math.max(1, os.cpus().length);
@@ -1171,6 +1175,7 @@ interface ReviewFileIndex {
   pathText: string;
   folderNorm: string;
   depth: number;
+  mtimeMs: number;
 }
 
 interface ReviewFolderIndex {
@@ -1181,6 +1186,7 @@ interface ReviewFolderIndex {
   pathText: string;
   depth: number;
   children: string[];
+  mtimeMs: number;
 }
 
 let reviewFileCache: {
@@ -1201,6 +1207,8 @@ function buildReviewIndex(root: string, files: string[], folders: string[]): { f
 
     const relative = path.relative(root, filePath);
     const fileName = path.basename(filePath);
+    let mtimeMs = 0;
+    try { mtimeMs = statSync(filePath).mtimeMs; } catch {}
     return {
       path: filePath,
       name: fileName,
@@ -1208,12 +1216,15 @@ function buildReviewIndex(root: string, files: string[], folders: string[]): { f
       fileText: normalizeMatchText(fileName),
       pathText: normalizeMatchText(relative),
       folderNorm: normalizeMatchText(path.dirname(relative)),
-      depth: relative.split(/[\\/]/).length - 1
+      depth: relative.split(/[\\/]/).length - 1,
+      mtimeMs
     };
   });
 
   const folderIndex: ReviewFolderIndex[] = folders.map((folderPath) => {
     const relative = path.relative(root, folderPath);
+    let mtimeMs = 0;
+    try { mtimeMs = statSync(folderPath).mtimeMs; } catch {}
     return {
       path: folderPath,
       name: path.basename(folderPath),
@@ -1221,7 +1232,8 @@ function buildReviewIndex(root: string, files: string[], folders: string[]): { f
       nameText: normalizeMatchText(path.basename(folderPath)),
       pathText: normalizeMatchText(relative),
       depth: relative.split(/[\\/]/).length - 1,
-      children: folderChildMap.get(folderPath) ?? []
+      children: folderChildMap.get(folderPath) ?? [],
+      mtimeMs
     };
   });
 
@@ -1266,6 +1278,10 @@ async function testEverythingConnection(settings: AppSettings): Promise<{ availa
   }
 }
 
+function safeMtimeMs(filePath: string): number {
+  try { return statSync(filePath).mtimeMs; } catch { return 0; }
+}
+
 async function scanReviewAssets(root: string, query: string, settings?: AppSettings, event?: Electron.IpcMainInvokeEvent): Promise<ReviewSearchResult[]> {
   if (!root || !existsSync(root)) throw new Error("请先选择收评助手根目录。");
 
@@ -1281,7 +1297,8 @@ async function scanReviewAssets(root: string, query: string, settings?: AppSetti
         name: path.basename(filePath),
         kind: "image" as const,
         score: scoringEnabled ? Math.max(100 - index, 10) : 0,
-        reason: "Everything",
+        reason: scoringEnabled ? "Everything" : "未启用评分",
+        mtimeMs: safeMtimeMs(filePath),
         thumbnailDataUrl: thumbMap.get(filePath)
       }));
     }
@@ -1315,17 +1332,18 @@ async function scanReviewAssets(root: string, query: string, settings?: AppSetti
   }
   const { fileIndex, folderIndex } = reviewFileCache;
   const terms = buildMatchTerms(query);
-  if (event) event.sender.send("review:scanProgress", { scanned: fileIndex.length, currentDir: "", phase: "scoring" });
 
   if (!scoringEnabled) {
     const matchesImage = (item: ReviewFileIndex) => terms.length === 0 || terms.some((term) => item.fileText.includes(term) || item.folderNorm.includes(term) || item.pathText.includes(term));
     const matchesFolder = (item: ReviewFolderIndex) => terms.length === 0 || terms.some((term) => item.nameText.includes(term) || item.pathText.includes(term));
     const topImages = fileIndex
       .filter(matchesImage)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
       .slice(0, 80)
-      .map((item) => ({ path: item.path, name: item.name, kind: "image" as const, score: 0, reason: "未启用评分" }));
+      .map((item) => ({ path: item.path, name: item.name, kind: "image" as const, score: 0, reason: "未启用评分", mtimeMs: item.mtimeMs }));
     const topFolders = folderIndex
       .filter((item) => item.children.length > 0 && matchesFolder(item))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
       .slice(0, 30)
       .map((item) => ({
         path: item.path,
@@ -1333,7 +1351,8 @@ async function scanReviewAssets(root: string, query: string, settings?: AppSetti
         kind: "folder" as const,
         score: 0,
         reason: "未启用评分",
-        children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片" }))
+        mtimeMs: item.mtimeMs,
+        children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片", mtimeMs: safeMtimeMs(fp) }))
       }));
     const merged: ReviewSearchResult[] = [...topImages, ...topFolders].slice(0, 120);
     const thumbPaths = new Set<string>();
@@ -1352,9 +1371,11 @@ async function scanReviewAssets(root: string, query: string, settings?: AppSetti
     return merged;
   }
 
+  if (event) event.sender.send("review:scanProgress", { scanned: fileIndex.length, currentDir: "", phase: "scoring" });
+
   const scoredImages = fileIndex.map((item) => {
     const candidate = scoreIndexedFile(item, terms);
-    return { path: item.path, name: item.name, kind: "image" as const, score: candidate.score, reason: candidate.reason };
+    return { path: item.path, name: item.name, kind: "image" as const, score: candidate.score, reason: candidate.reason, mtimeMs: item.mtimeMs };
   });
   const topImages = scoredImages
     .filter((item) => item.score >= 28)
@@ -1369,7 +1390,8 @@ async function scanReviewAssets(root: string, query: string, settings?: AppSetti
       kind: "folder" as const,
       score: folderScore.score,
       reason: folderScore.reason,
-      children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片" }))
+      mtimeMs: item.mtimeMs,
+      children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片", mtimeMs: safeMtimeMs(fp) }))
     };
   });
   const topFolders = scoredFolders
@@ -1637,13 +1659,211 @@ async function enhanceTitlePoolWithLLM(
   }
 }
 
+let recognitionInFlightRequests = 0;
+const recognitionPendingRequests: Array<() => void> = [];
+
+async function runWithRecognitionModelLimit<T>(settings: AppSettings, task: () => Promise<T>): Promise<T> {
+  const limit = Math.max(1, settings.modelConcurrency || 1);
+  if (recognitionInFlightRequests >= limit) {
+    await new Promise<void>((resolve) => recognitionPendingRequests.push(resolve));
+  }
+  recognitionInFlightRequests += 1;
+  try {
+    return await task();
+  } finally {
+    recognitionInFlightRequests = Math.max(0, recognitionInFlightRequests - 1);
+    recognitionPendingRequests.shift()?.();
+  }
+}
+
+function shouldRetryModelRequest(status: number) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+async function waitForModelRetry(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withLearningNotes(prompt: string, settings: AppSettings) {
+  const notes = settings.learningPromptNotes.trim();
+  if (!notes) return prompt;
+  return `${prompt}\n\n历史纠偏规则：\n${notes}`;
+}
+
+async function callRecognitionChatCompletions(
+  settings: AppSettings,
+  model: string,
+  messages: unknown[]
+): Promise<Record<string, unknown>> {
+  const normalized = normalizeSettings(settings);
+  const maxAttempts = Math.max(1, (normalized.modelRetryCount || 0) + 1);
+
+  return runWithRecognitionModelLimit(normalized, async () => {
+    const activeProfile = getActiveApiProfile(normalized);
+    const fallbackProfiles = normalized.apiProfiles.filter(
+      (profile) => profile.id !== activeProfile.id && profile.apiBaseUrl && profile.apiKey
+    );
+    const profiles = [activeProfile, ...fallbackProfiles].filter((profile) => profile.apiBaseUrl && profile.apiKey);
+    if (!profiles.length) {
+      throw new Error("请先在设置中填写至少一个可用的 API Base URL 和 API Key。");
+    }
+    let lastError = "";
+
+    for (const profile of profiles) {
+      const profileSettings = normalizeSettings({ ...normalized, activeApiProfileId: profile.id });
+      const profileModel = model === normalized.textModel ? profile.textModel : model === normalized.visionModel ? profile.visionModel : model;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 45000);
+        try {
+          const endpoint = `${profileSettings.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${profileSettings.apiKey}`
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: profileModel,
+              temperature: 0,
+              response_format: { type: "json_object" },
+              messages
+            })
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            lastError = `模型接口请求失败：${response.status} ${text}`;
+            if (attempt < maxAttempts && shouldRetryModelRequest(response.status)) {
+              await waitForModelRetry(500 * 2 ** (attempt - 1));
+              continue;
+            }
+            break;
+          }
+
+          const data = await response.json();
+          const content = data?.choices?.[0]?.message?.content;
+          if (!content) throw new Error("模型没有返回可解析内容。");
+          return JSON.parse(content);
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : "模型接口请求失败";
+          if (attempt < maxAttempts) {
+            await waitForModelRetry(500 * 2 ** (attempt - 1));
+            continue;
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+    }
+    throw new Error(lastError || "模型接口请求失败");
+  });
+}
+
+function normalizeRecognitionModelResult(value: Record<string, unknown>, source: RecognitionResult["source"]): RecognitionResult {
+  const account = String(value.account ?? "").trim();
+  const name = String(value.name ?? "").trim();
+  return {
+    account,
+    name,
+    confidence: Number(value.confidence ?? 0),
+    reason: String(value.reason ?? "模型识别完成"),
+    source,
+    rawText: ""
+  };
+}
+
+function normalizeCloudBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "1", "一致", "正确"].includes(normalized)) return true;
+    if (["false", "no", "0", "不一致", "错误"].includes(normalized)) return false;
+  }
+  if (typeof value === "number") return value === 1;
+  return false;
+}
+
+async function recognizeTextInMain(text: string, settings: AppSettings): Promise<RecognitionResult> {
+  const normalized = normalizeSettings(settings);
+  const rules = recognizeByRules(text);
+  if (rules) return rules;
+
+  if (!normalized.aiEnabled) {
+    const partial = recognizePartialByRules(text);
+    if (partial) return partial;
+    throw new Error("本地规则无法识别，且 AI 识别已关闭。");
+  }
+
+  const result = await callRecognitionChatCompletions(normalized, normalized.textModel, [
+    { role: "system", content: withLearningNotes(TEXT_RECOGNITION_PROMPT, normalized) },
+    { role: "user", content: text }
+  ]);
+  return { ...normalizeRecognitionModelResult(result, "text-model"), rawText: text };
+}
+
+async function reviewRecognitionCloudInMain(
+  rawText: string,
+  localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">,
+  settings: AppSettings
+): Promise<CloudReview> {
+  const normalized = normalizeSettings(settings);
+  if (!normalized.aiEnabled) {
+    return { status: "error", reason: "AI 识别已关闭，无法进行云端增强校验。" };
+  }
+
+  const result = await callRecognitionChatCompletions(normalized, normalized.textModel, [
+    { role: "system", content: withLearningNotes(CLOUD_REVIEW_PROMPT, normalized) },
+    { role: "user", content: JSON.stringify({ rawText, localResult }, null, 2) }
+  ]);
+
+  const cloudAccount = String(result.account ?? "").trim();
+  const cloudName = String(result.name ?? "").trim();
+  const accountMatches = !cloudAccount || cloudAccount === localResult.account;
+  const nameMatches = !cloudName || cloudName === localResult.name;
+  const valid = normalizeCloudBoolean(result.valid) && accountMatches && nameMatches;
+  return {
+    status: valid ? "passed" : "warning",
+    valid,
+    account: cloudAccount,
+    name: cloudName,
+    confidence: Number(result.confidence ?? 0),
+    reason: String(result.reason ?? "云端增强校验完成")
+  };
+}
+
+async function testModelConnectionInMain(settings: AppSettings): Promise<ModelConnectionStatus> {
+  const normalized = normalizeSettings(settings);
+  if (!normalized.apiBaseUrl || !normalized.apiKey || !normalized.textModel) {
+    return { state: "failed", detail: "API Base URL、API Key 或文本模型名未填写完整。" };
+  }
+
+  try {
+    const result = await callRecognitionChatCompletions(normalized, normalized.textModel, [
+      { role: "system", content: "你是连接测试助手。只返回 JSON：{\"ok\":true,\"message\":\"连接成功\"}" },
+      { role: "user", content: "测试连接" }
+    ]);
+    const ok = Boolean(result.ok ?? true);
+    return {
+      state: ok ? "connected" : "failed",
+      detail: String(result.message ?? (ok ? "大模型连接成功。" : "模型返回测试失败。"))
+    };
+  } catch (error) {
+    return {
+      state: "failed",
+      detail: error instanceof Error ? error.message : "大模型连接测试失败。"
+    };
+  }
+}
+
 
 async function generateReviewCopy(settings: AppSettings, options: ReviewGenerationOptions): Promise<ReviewGenerationResult> {
   const normalizedSettings = normalizeSettings(settings);
   const profile = getReviewApiProfile(normalizedSettings);
   if (!profile.apiBaseUrl || !profile.apiKey) throw new Error("请先在设置中填写 API Base URL 和 API Key。");
   const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
-  const targetLength = Math.min(300, Math.max(30, Math.round(Number(options.targetLength) || normalizedSettings.reviewTargetLength)));
+  const targetLength = Math.min(100, Math.max(30, Math.round(Number(options.targetLength) || normalizedSettings.reviewTargetLength)));
   const thinkingMode = options.thinkingMode || normalizedSettings.reviewThinkingMode;
   const thinkingEffort = options.thinkingEffort || normalizedSettings.reviewThinkingEffort;
 
@@ -1824,6 +2044,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("review:generateCopy", (_event, settings: AppSettings, options: ReviewGenerationOptions) => generateReviewCopy(settings, options));
   ipcMain.handle("drag:startFiles", (event, paths: string[]) => startDragFiles(event, paths));
   ipcMain.handle("title:enhancePool", (_event, settings: AppSettings, payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }) => enhanceTitlePoolWithLLM(settings, payload));
+  ipcMain.handle("recognition:recognizeText", (_event, text: string, settings: AppSettings) => recognizeTextInMain(text, settings));
+  ipcMain.handle("recognition:cloudReview", (_event, rawText: string, localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">, settings: AppSettings) => reviewRecognitionCloudInMain(rawText, localResult, settings));
+  ipcMain.handle("ai:testConnection", (_event, settings: AppSettings) => testModelConnectionInMain(settings));
   ipcMain.handle("ai:listModels", (_event, settings: AppSettings) => listAvailableModels(settings));
   ipcMain.handle("everything:test", (_event, settings: AppSettings) => testEverythingConnection(normalizeSettings(settings)));
   ipcMain.handle("update:check", (_event, settings: AppSettings) => checkForUpdates(settings));
