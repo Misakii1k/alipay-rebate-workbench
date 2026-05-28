@@ -56,12 +56,9 @@ import {
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
 type FeatureMaturity = "M1" | "M2" | "M3";
 
-const APP_VERSION = "0.9.6";
+const APP_VERSION = "0.9.5";
 const MAKER_CREDIT = "由 Misaki（丛宇航）使用 CodeX 制作";
 const CHANGELOG_ITEMS = [
-  "设置页恢复多 API 配置管理：可添加/删除/切换多个 API 配置，每个配置独立保存 Base URL、Key 和模型名。",
-  "设置页新增「获取模型列表」按钮，自动从 API 读取可用模型并下拉选择。",
-  "收评助手设置新增独立 API 配置选择，可指定使用哪个配置，不选则跟随全局。",
   "收评助手支持三种工作模式切换：混合模式（完整流程）、搜索模式（只搜图）、AI评价模式（只生成文案）。",
   "收评增加评分开关，关闭后搜索更快、不显示相关度分数；新增目标字数滑块（30-100字）和思考模式控制。",
   "设置页 API Key 增加小眼睛，可切换显示/隐藏，保护隐私。",
