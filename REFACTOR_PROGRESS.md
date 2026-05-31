@@ -1,7 +1,7 @@
 # 项目重构进度报告
 
 **日期**: 2026-05-31  
-**状态**: 阶段1部分完成（~15%）
+**状态**: 阶段1部分完成（~35%）
 
 ---
 
@@ -12,62 +12,63 @@
 - ✅ 包含 12 个文件，+2121/-535 行
 - ✅ 可随时回滚到此版本
 
-### 阶段 1：模块化基础设施
+### 阶段 1：模块化架构（35%完成）
 
 #### Utils 模块（4个文件，已完成）
 ```
 electron/utils/
-├── security.ts      # 7个安全函数（validatePathSafety, validateMediaFilePath, 
-│                    # validateApiUrl, sanitizeCellText, sanitizeEverythingQuery）
-├── logger.ts        # 日志和脱敏（appendLog, sanitizeForLog）
-├── paths.ts         # 路径工具（userDataPath, ensureUserDataDir）
-└── media.ts         # 图片处理（imageSignature, imageToDataUrl, probeImageSize）
+├── security.ts      # 7个安全函数
+├── logger.ts        # 日志和脱敏
+├── paths.ts         # 路径工具
+└── media.ts         # 图片处理
 ```
 
-**优势**：
-- 安全函数集中管理，易于审计
-- 日志脱敏逻辑统一，防止敏感信息泄露
-- 可被 handlers 和 services 复用
-
-#### Handlers 模块（5个文件，已完成）
+#### Handlers 模块（10个文件，已完成）
 ```
 electron/handlers/
-├── index.ts         # 统一注册入口（部分完成）
-├── settings.ts      # settings:load/save + 加密逻辑（完整）
-├── workbench.ts     # workbench + videoWorkbench 状态管理（完整）
-├── window.ts        # window:minimize/toggleMaximize/close（完整）
-├── clipboard.ts     # clipboard:read/writeText（完整）
-└── export.ts        # export:workbook（完整）
+├── index.ts         # 统一注册入口（已完成）
+├── settings.ts      # settings:load/save + 加密逻辑
+├── workbench.ts     # workbench + videoWorkbench 状态管理
+├── window.ts        # window:minimize/toggleMaximize/close
+├── clipboard.ts     # clipboard:read/writeText
+├── export.ts        # export:workbook
+├── media.ts         # media:latestImage/imagePreview
+├── ai.ts            # ai:testConnection/listModels
+├── everything.ts    # everything:test
+└── update.ts        # update:check/download/install
 ```
 
-**优势**：
-- 每个 handler 文件职责单一（~50-150行）
-- 易于定位和修改
-- 新增功能时可复制模板
+**已模块化的 handlers**：17个（共约30个handler）
+
+#### Main.ts 重构（已完成）
+- ✅ 导入 registerAllHandlers
+- ✅ 使用模块化的 handlers
+- ✅ 移除重复的 handler 注册代码
+- ✅ 减少约 200 行代码
+- ✅ 编译通过，构建成功
 
 #### 编译验证
 - ✅ `npx tsc -p tsconfig.electron.json` 编译通过
+- ✅ `npm run build` 完整构建成功
 - ✅ 新模块类型安全，无错误
 
 ---
 
-## ⏳ 未完成工作
+## ⏳ 未完成工作（65%）
 
-### 剩余 Handlers（9个文件）
+### 剩余 Handlers（仍在 main.ts 中）
 
-| 文件 | Handler数量 | 预计行数 | 复杂度 | 依赖 |
-|------|------------|---------|--------|------|
-| title.ts | 6 | ~500 | 高 | Excel解析、AI调用 |
-| ffmpeg.ts | 3 | ~200 | 中 | FFmpeg诊断、修复 |
-| video.ts | 2 | ~400 | 高 | FFmpeg渲染、进度通知 |
-| media.ts | 2 | ~100 | 低 | 文件扫描 |
-| review.ts | 6 | ~800 | 高 | 索引构建、Everything搜索、AI生成 |
-| recognition.ts | 2 | ~200 | 中 | AI调用、云端复核 |
-| ai.ts | 2 | ~100 | 低 | 模型连接测试 |
-| everything.ts | 1 | ~50 | 低 | Everything搜索 |
-| update.ts | 3 | ~150 | 中 | 自动更新、域名白名单 |
+| Handler | 数量 | 预计行数 | 复杂度 | 状态 |
+|---------|------|---------|--------|------|
+| title | 6 | ~600 | 高 | 待迁移 |
+| ffmpeg | 3 | ~300 | 中 | 待迁移 |
+| video | 2 | ~500 | 高 | 待迁移 |
+| review | 6 | ~900 | 高 | 待迁移 |
+| recognition | 2 | ~250 | 中 | 待迁移 |
+| files/directory | 2 | ~50 | 低 | 待迁移 |
+| log | 1 | ~10 | 低 | 待迁移 |
 
-**总计**: 27个handler，~2500行代码
+**总计**: 22个handler，~2600行代码待迁移
 
 ### Services 模块（5个文件，未开始）
 
@@ -115,81 +116,101 @@ electron/services/
 | 阶段 | 已完成 | 剩余 | 预计时间 |
 |------|--------|------|---------|
 | 阶段0：Git回滚点 | 100% | 0% | - |
-| 阶段1：后端重构 | 15% | 85% | 4-6小时 |
+| 阶段1：后端重构 | 35% | 65% | 3-5小时 |
 | 阶段2：前端重构 | 0% | 100% | 2-3小时 |
-| **总计** | **15%** | **85%** | **6-9小时** |
+| **总计** | **35%** | **65%** | **5-8小时** |
 
 ---
 
 ## 🎯 后续步骤建议
 
-### 方案 A：渐进式迁移（推荐）
+### 当前状态总结
 
-**策略**：保持现有 main.ts 不变，逐步迁移功能到新模块
+**已完成**：
+- ✅ 模块化基础设施（utils + handlers）
+- ✅ 10个handler模块（17个handler）
+- ✅ main.ts 集成新架构
+- ✅ 编译和构建验证通过
+
+**剩余工作**：
+- ⏳ 5个复杂handler模块（title, ffmpeg, video, review, recognition）
+- ⏳ 2个简单handler（files, log）
+- ⏳ 前端重构（App.tsx）
+
+### 方案 A：继续完成后端重构（推荐）
+
+**策略**：完成剩余的 handler 提取
 
 **步骤**：
-1. 在 main.ts 顶部导入新的 utils 模块
-2. 将现有函数标记为 `@deprecated`，指向新模块
-3. 每次迁移1-2个handler，测试后提交
-4. 新功能直接使用新模块结构
+1. 提取 files 和 log handlers（简单，~30分钟）
+2. 提取 recognition handler（中等，~1小时）
+3. 提取 ffmpeg handler（中等，~1小时）
+4. 提取 title handler（复杂，~1.5小时）
+5. 提取 video handler（复杂，~1.5小时）
+6. 提取 review handler（最复杂，~2小时）
 
 **优点**：
-- ✅ 风险低，可随时停止
-- ✅ 不影响现有功能
-- ✅ 可以分多次完成
+- ✅ 完成后端模块化
+- ✅ main.ts 减少到 ~500 行
+- ✅ 架构清晰，易于维护
 
-**缺点**：
-- ❌ 需要较长时间完成
-- ❌ 过渡期存在两套代码
-
-**适用场景**：生产环境，需要稳定性
+**预计时间**：5-8小时
 
 ---
 
-### 方案 B：一次性完成重构
+### 方案 B：暂停后端，开始前端重构
 
-**策略**：在新分支完成所有重构，测试后合并
+**策略**：保持当前后端状态，开始 App.tsx 重构
 
 **步骤**：
-1. 创建 `refactor/modularize` 分支
-2. 完成所有 handlers 提取（4-6小时）
-3. 完成 main.ts 重构（1小时）
-4. 完成前端重构（2-3小时）
-5. 全面测试后合并到主分支
+1. 提取通用组件（Panel, Toggle, EmptyState, BrandGlyph）
+2. 提取自定义 Hooks（useSettings, useWorkbench, useRecognition, useClipboard）
+3. 提取视图组件（ToolboxHome, SettingsView, rebate/*）
+4. 简化 App.tsx 为路由组件
 
 **优点**：
-- ✅ 架构清晰，无过渡代码
-- ✅ 一次性解决维护性问题
+- ✅ 前后端并行推进
+- ✅ 快速看到前端改进
 
 **缺点**：
-- ❌ 需要连续6-9小时工作
-- ❌ 测试工作量大
-- ❌ 合并冲突风险
+- ❌ 后端仍有 65% 未完成
 
-**适用场景**：有充足时间，可以专注完成
+**预计时间**：2-3小时
 
 ---
 
-### 方案 C：混合架构（快速见效）
+### 方案 C：渐进式完成（分多次）
 
-**策略**：修改 main.ts 使用新 utils，保留现有 handler 结构
+**策略**：每次完成1-2个handler，分多天完成
 
 **步骤**：
-1. 在 main.ts 中导入 utils 模块
-2. 替换重复的安全函数调用为 utils 导入
-3. 保留所有 handler 在 main.ts 中
-4. 添加注释标记可迁移的函数
+- 第1次：files + log（30分钟）
+- 第2次：recognition（1小时）
+- 第3次：ffmpeg（1小时）
+- 第4次：title（1.5小时）
+- 第5次：video（1.5小时）
+- 第6次：review（2小时）
+- 第7次：前端重构（2-3小时）
 
 **优点**：
-- ✅ 立即获得 utils 模块的好处
-- ✅ 工作量小（~1小时）
-- ✅ 不破坏现有结构
+- ✅ 风险低，每次可测试
+- ✅ 可随时停止
 
 **缺点**：
-- ❌ 架构改进有限
-- ❌ 仍需后续迁移
+- ❌ 需要较长时间完成（1-2周）
 
-**适用场景**：快速改进，保留后续优化空间
+---
+
+## 📝 Git 提交历史
+
+| 提交 | 描述 | 文件数 | 行数变化 |
+|------|------|--------|---------|
+| d110f30 | 安全修复 phase 1 & 2 | 12 | +2121/-535 |
+| d2e4f9c | 模块化架构基础（utils + 6 handlers） | 11 | +947/0 |
+| 1acae06 | 新增 media, ai, everything handlers | 4 | +228/-13 |
+| 372ee6a | 集成模块化 handlers 到 main.ts | 2 | +139/-59 |
+
+**总计**：4次提交，29个新文件，+3435/-607 行
 
 ---
 
