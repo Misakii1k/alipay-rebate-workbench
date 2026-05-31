@@ -1,4 +1,4 @@
-import { AppSettings, CloudReview, ModelConnectionStatus, RecognitionResult, getActiveApiProfile, normalizeSettings } from "./shared";
+import { ANTHROPIC_API_VERSION, AppSettings, CloudReview, ModelConnectionStatus, RecognitionResult, getActiveApiProfile, normalizeSettings } from "./shared";
 import { isValidAccount } from "./parsing";
 
 const ACCOUNT_RE = /([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|1[3-9]\d{9})/i;
@@ -48,23 +48,49 @@ export function recognizePartialByRules(text: string): RecognitionResult | null 
 }
 
 export const TEXT_RECOGNITION_PROMPT = `你是支付宝返款表录入助手。请只从用户提供的文本中提取收款方支付宝账号和收款方姓名。
-规则：
-1. 支付宝账号只能是中国大陆手机号或邮箱。
-2. 姓名必须来自原文，不要猜测、不要补全。
+
+## 提取规则
+1. 支付宝账号只能是：中国大陆11位手机号（1[3-9]开头）或标准邮箱地址（含@和域名）。
+2. 收款方姓名只能是 2-4 个中文字符的真人姓名，不要提取昵称、商品名、店铺名。
 3. 如果无法确定，字段返回空字符串，confidence 给低分。
-4. 只返回 JSON，不要 Markdown，不要解释。
-JSON 格式：
+4. 文本中有多个候选时，优先提取最可能是收款信息的那组（通常紧挨着出现）。
+
+## 常见陷阱
+- 不要提取 QQ号、订单号、金额作为账号
+- 不要提取"支付宝""收款人""备注"等标签词作为姓名
+- 姓名含标点或空格时合并（如"张 三"→"张三"）
+
+## 输出格式
+只返回 JSON，不要 Markdown，不要代码块：
 {"account":"支付宝账号","name":"收款方姓名","confidence":0.0,"reason":"简短说明"}`;
 
 export const CLOUD_REVIEW_PROMPT = `你是支付宝返款表的云端复核助手。请根据原始文本和本地识别结果，判断本地识别的支付宝账号与收款方姓名是否可靠。
-规则：
-1. 账号只能是中国大陆手机号或邮箱。
-2. 姓名必须来自原始文本，不要猜测。
-3. 如果本地结果正确，valid 返回 true，并原样返回 account/name。
-4. 如果本地结果可疑或错误，valid 返回 false，并在能确定时给出更可信的 account/name；无法确定则返回空字符串。
-5. 只返回 JSON，不要 Markdown。
-JSON 格式：
-{"valid":true,"account":"支付宝账号","name":"收款方姓名","confidence":0.0,"reason":"简短说明"}`;
+
+## 核心规则
+1. 支付宝账号只能是：中国大陆11位手机号（1[3-9]xxxxxxxxx）或标准邮箱地址。
+2. 收款方姓名只能是 2-4 个中文字符的真人姓名，不能是昵称、品牌名、商品名。
+3. 账号和姓名必须同时出现在原始文本中，缺一不可猜测。
+
+## 常见错误模式（必须纠正）
+- 把 QQ号、订单号、金额数字误认为手机号 → 只取 1 开头的 11 位数字
+- 把"支付宝"、"收款人"等标签词当姓名 → 过滤掉
+- 把邮箱前缀中的字母数字当姓名 → 忽略
+- 把商品名、店铺名当姓名（如"连衣裙"、"数码店"）→ 过滤掉
+- 文本中有多个手机号/邮箱时 → 优先取与姓名相邻的那个
+- 姓名被空格或符号断开（如"张 三"）→ 合并为"张三"
+
+## 判断标准
+- valid=true：账号和姓名都正确，且能从原始文本中明确对应
+- valid=false：任一字段错误、可疑、或无法从原文确认
+- confidence 范围：0.0（完全不确定）到 1.0（非常确定）
+  - 0.9-1.0：原文清晰写了"支付宝xxx"或"姓名xxx"，直接匹配
+  - 0.7-0.89：能从上下文推断，但表述不够直接
+  - 0.5-0.69：有多个可能，取最可能的那个
+  - 0.0-0.49：高度不确定，建议人工确认
+
+## 输出格式
+只返回 JSON，不要 Markdown，不要代码块：
+{"valid":true,"account":"支付宝账号","name":"收款方姓名","confidence":0.0,"reason":"简短说明判断依据"}`;
 
 export const FEEDBACK_LEARNING_PROMPT = `你是支付宝返款表识别规则优化助手。用户最终没有采用云端复核结果，而是选择本地结果或自己填写。
 请根据原始文本、本地结果、云端结果、最终采用结果，总结一条可复用的识别规则，用于下次提高准确率。
@@ -96,6 +122,14 @@ function shouldRetry(status: number) {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
+/** 校验 API Base URL 使用 HTTPS，非 HTTPS（localhost 除外）时抛出错误 */
+function assertHttpsUrl(url: string): void {
+  if (!url) return;
+  if (!url.startsWith("https://") && !url.startsWith("http://localhost") && !url.startsWith("http://127.0.0.1")) {
+    throw new Error("安全错误：API Base URL 必须使用 HTTPS 协议，以保护 API Key 不被窃取。本地测试可使用 localhost 或 127.0.0.1。");
+  }
+}
+
 async function wait(ms: number) {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -121,40 +155,89 @@ async function callChatCompletions(
     for (const profile of profiles) {
       const profileSettings = normalizeSettings({ ...settings, activeApiProfileId: profile.id });
       const profileModel = model === settings.textModel ? profile.textModel : model === settings.visionModel ? profile.visionModel : model;
+      const isAnthropic = profile.apiType === "anthropic";
+
+      // 校验 HTTPS
+      try {
+        assertHttpsUrl(profileSettings.apiBaseUrl);
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : "API URL 校验失败";
+        continue; // 跳过此 profile，尝试下一个
+      }
+
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 45000);
         try {
-          const endpoint = `${profileSettings.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
-          const response = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${profileSettings.apiKey}`
-            },
-            signal: controller.signal,
-            body: JSON.stringify({
+          if (isAnthropic) {
+            const baseUrl = profileSettings.apiBaseUrl.replace(/\/$/, "");
+            const endpoint = baseUrl.endsWith("/v1") ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`;
+            const sysMsg = (messages as Array<{ role: string; content: string }>).find((m) => m.role === "system");
+            const chatMessages = (messages as Array<{ role: string; content: string }>).filter((m) => m.role !== "system");
+            const body: Record<string, unknown> = {
               model: profileModel,
-              temperature: 0,
-              response_format: { type: "json_object" },
-              messages
-            })
-          });
+              max_tokens: 4096,
+              messages: chatMessages.map((m) => ({ role: m.role, content: m.content }))
+            };
+            if (sysMsg) body.system = sysMsg.content;
 
-          if (!response.ok) {
-            const text = await response.text();
-            lastError = `模型接口请求失败：${response.status} ${text}`;
-            if (attempt < maxAttempts && shouldRetry(response.status)) {
-              await wait(500 * 2 ** (attempt - 1));
-              continue;
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": profileSettings.apiKey,
+                "anthropic-version": ANTHROPIC_API_VERSION
+              },
+              signal: controller.signal,
+              body: JSON.stringify(body)
+            });
+
+            if (!response.ok) {
+              const text = await response.text();
+              lastError = `Anthropic API 请求失败：${response.status} ${text}`;
+              if (attempt < maxAttempts && shouldRetry(response.status)) {
+                await wait(500 * 2 ** (attempt - 1));
+                continue;
+              }
+              break;
             }
-            break;
-          }
 
-          const data = await response.json();
-          const content = data?.choices?.[0]?.message?.content;
-          if (!content) throw new Error("模型没有返回可解析内容。");
-          return JSON.parse(content);
+            const data = await response.json();
+            const textContent = data?.content?.[0]?.text;
+            if (!textContent) throw new Error("Anthropic 没有返回可解析内容。");
+            return JSON.parse(textContent);
+          } else {
+            const endpoint = `${profileSettings.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${profileSettings.apiKey}`
+              },
+              signal: controller.signal,
+              body: JSON.stringify({
+                model: profileModel,
+                temperature: 0,
+                response_format: { type: "json_object" },
+                messages
+              })
+            });
+
+            if (!response.ok) {
+              const text = await response.text();
+              lastError = `模型接口请求失败：${response.status} ${text}`;
+              if (attempt < maxAttempts && shouldRetry(response.status)) {
+                await wait(500 * 2 ** (attempt - 1));
+                continue;
+              }
+              break;
+            }
+
+            const data = await response.json();
+            const content = data?.choices?.[0]?.message?.content;
+            if (!content) throw new Error("模型没有返回可解析内容。");
+            return JSON.parse(content);
+          }
         } catch (error) {
           lastError = error instanceof Error ? error.message : "模型接口请求失败";
           if (attempt < maxAttempts) {

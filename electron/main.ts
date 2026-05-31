@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, session, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
@@ -8,6 +8,7 @@ import os from "node:os";
 import ExcelJS from "exceljs";
 import { autoUpdater } from "electron-updater";
 import {
+  ANTHROPIC_API_VERSION,
   AppSettings,
   ClipboardSnapshot,
   DEFAULT_FIXED_TAIL_ROW,
@@ -64,8 +65,107 @@ function userDataPath(...segments: string[]) {
   return path.join(app.getPath("userData"), ...segments);
 }
 
+/**
+ * 校验路径安全性，防止路径遍历攻击。
+ * 拒绝访问系统目录、程序目录和其他敏感位置。
+ * @param targetPath 待校验的路径
+ * @param allowedRoots 可选的允许访问的根目录列表（如用户选择的工作目录）
+ * @throws Error 如果路径不安全
+ */
+function validatePathSafety(targetPath: string, allowedRoots?: string[]): void {
+  if (!targetPath) {
+    throw new Error("路径不能为空");
+  }
+
+  const resolved = path.resolve(targetPath);
+  const normalized = path.normalize(resolved).toLowerCase();
+
+  // 黑名单：禁止访问的系统目录
+  const forbiddenPaths = [
+    path.normalize("C:\\Windows").toLowerCase(),
+    path.normalize("C:\\Program Files").toLowerCase(),
+    path.normalize("C:\\Program Files (x86)").toLowerCase(),
+    path.normalize("C:\\ProgramData").toLowerCase(),
+    path.normalize(process.env.SystemRoot || "C:\\Windows").toLowerCase(),
+    path.normalize(process.env.ProgramFiles || "C:\\Program Files").toLowerCase(),
+    path.normalize(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)").toLowerCase()
+  ];
+
+  // 检查是否在黑名单中
+  for (const forbidden of forbiddenPaths) {
+    if (normalized === forbidden || normalized.startsWith(forbidden + path.sep)) {
+      throw new Error(`安全错误：禁止访问系统目录 ${forbidden}`);
+    }
+  }
+
+  // 如果提供了白名单，检查路径是否在允许的根目录下
+  if (allowedRoots && allowedRoots.length > 0) {
+    const isAllowed = allowedRoots.some((root) => {
+      if (!root) return false;
+      const normalizedRoot = path.normalize(path.resolve(root)).toLowerCase();
+      return normalized === normalizedRoot || normalized.startsWith(normalizedRoot + path.sep);
+    });
+
+    if (!isAllowed) {
+      throw new Error("安全错误：路径不在允许访问的目录范围内");
+    }
+  }
+}
+
 async function ensureUserDataDir() {
   await fs.mkdir(app.getPath("userData"), { recursive: true });
+}
+
+function sanitizeForLog(obj: unknown): unknown {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === "string") {
+    return obj
+      .replace(/sk-[a-zA-Z0-9]{20,}/g, "sk-***")
+      .replace(/Bearer\s+[a-zA-Z0-9\-_]+/gi, "Bearer ***")
+      .replace(/"apiKey"\s*:\s*"[^"]+"/gi, '"apiKey":"***"')
+      .replace(/"x-api-key"\s*:\s*"[^"]+"/gi, '"x-api-key":"***"')
+      // 脱敏手机号（保留前3后4位）
+      .replace(/\b(1[3-9]\d)(\d{4})(\d{4})\b/g, "$1****$3")
+      // 脱敏邮箱（保留前2字符和域名）
+      .replace(/\b([a-zA-Z0-9._%+-]{1,2})[a-zA-Z0-9._%+-]*@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/gi, "$1***@$2")
+      // 脱敏中文姓名（保留姓氏）
+      .replace(/(?<="name"\s*:\s*")[一-龥]{2,4}(?=")/g, (match) => match[0] + "*".repeat(match.length - 1))
+      // 脱敏金额（保留整数部分，小数部分替换为 **.** ）
+      .replace(/(?<="amount"\s*:\s*")\d+(\.\d+)?(?=")/g, (match) => {
+        const parts = match.split(".");
+        return parts[0] + (parts[1] ? ".**" : "");
+      });
+  }
+  if (Array.isArray(obj)) return obj.map(sanitizeForLog);
+  if (typeof obj === "object") {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey.includes("apikey") || lowerKey.includes("api_key") || lowerKey === "authorization" || lowerKey === "x-api-key") {
+        cleaned[key] = "***";
+      } else if (lowerKey === "account" && typeof value === "string") {
+        // 脱敏 account 字段（手机号或邮箱）
+        if (/^1[3-9]\d{9}$/.test(value)) {
+          cleaned[key] = value.slice(0, 3) + "****" + value.slice(-4);
+        } else if (/@/.test(value)) {
+          cleaned[key] = value.replace(/^([^@]{1,2})[^@]*@/, "$1***@");
+        } else {
+          cleaned[key] = "***";
+        }
+      } else if (lowerKey === "name" && typeof value === "string" && /[一-龥]/.test(value)) {
+        // 脱敏中文姓名（保留姓氏）
+        cleaned[key] = value[0] + "*".repeat(Math.max(0, value.length - 1));
+      } else if ((lowerKey === "amount" || lowerKey.includes("price")) && typeof value === "string") {
+        // 脱敏金额
+        const parts = value.split(".");
+        cleaned[key] = parts[0] + (parts[1] ? ".**" : "");
+      } else {
+        cleaned[key] = sanitizeForLog(value);
+      }
+    }
+    return cleaned;
+  }
+  return obj;
 }
 
 async function appendLog(level: "info" | "warn" | "error", message: string, meta?: unknown) {
@@ -73,7 +173,7 @@ async function appendLog(level: "info" | "warn" | "error", message: string, meta
   const logDir = userDataPath("logs");
   await fs.mkdir(logDir, { recursive: true });
   const date = new Date().toISOString().slice(0, 10);
-  const line = JSON.stringify({ time: new Date().toISOString(), level, message, meta }) + "\n";
+  const line = JSON.stringify({ time: new Date().toISOString(), level, message, meta: sanitizeForLog(meta) }) + "\n";
   await fs.appendFile(path.join(logDir, `${date}.log`), line, "utf-8");
 }
 
@@ -83,8 +183,14 @@ async function loadSettings(): Promise<AppSettings> {
   if (!existsSync(filePath)) return DEFAULT_SETTINGS;
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const settings = normalizeSettings(JSON.parse(raw));
-    await saveSettings(settings);
+    const parsed = JSON.parse(raw);
+    // 解密敏感字段（兼容旧版明文数据）
+    const decrypted = decryptSettingsFields(parsed);
+    const settings = normalizeSettings(decrypted);
+    // 迁移：如果是旧版明文，回写加密版本
+    if (hasPlaintextSecrets(parsed)) {
+      await saveSettings(settings);
+    }
     return settings;
   } catch {
     await appendLog("error", "读取设置失败，已回退默认设置");
@@ -95,8 +201,125 @@ async function loadSettings(): Promise<AppSettings> {
 async function saveSettings(settings: AppSettings): Promise<AppSettings> {
   await ensureUserDataDir();
   const next = normalizeSettings(settings);
-  await fs.writeFile(userDataPath("settings.json"), JSON.stringify(next, null, 2), "utf-8");
+
+  // 检查是否有敏感数据需要保存
+  const hasSensitiveData = next.apiProfiles.some((p) => p.apiKey.trim().length > 0) ||
+    next.fixedTailAccount.trim().length > 0 ||
+    next.fixedTailName.trim().length > 0;
+
+  // 如果有敏感数据但加密不可用，拒绝保存并给出明确提示
+  if (hasSensitiveData && !safeStorage.isEncryptionAvailable()) {
+    await appendLog("error", "系统加密服务不可用，拒绝保存包含敏感数据的设置");
+    throw new Error(
+      "安全错误：系统加密服务不可用，无法安全存储 API Key 和敏感信息。\n\n" +
+      "可能原因：\n" +
+      "1. Windows 用户账户未登录或使用本地账户\n" +
+      "2. 系统加密功能被禁用\n" +
+      "3. 运行在虚拟机或特殊环境中\n\n" +
+      "建议：请使用 Microsoft 账户登录 Windows，或联系系统管理员启用数据保护 API (DPAPI)。"
+    );
+  }
+
+  // 加密敏感字段后写入磁盘
+  const encrypted = encryptSettingsFields(next);
+  await fs.writeFile(userDataPath("settings.json"), JSON.stringify(encrypted, null, 2), "utf-8");
   return next;
+}
+
+const SENSITIVE_PROFILE_FIELDS = ["apiKey"] as const;
+const SENSITIVE_ROOT_FIELDS = ["fixedTailAccount", "fixedTailName"] as const;
+
+interface EncryptedField {
+  __enc: string;
+}
+
+function isEncryptedField(value: unknown): value is EncryptedField {
+  return typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).__enc === "string";
+}
+
+function encryptField(plaintext: string): EncryptedField {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("系统加密服务不可用，无法安全存储敏感数据。请确保 Windows 用户账户已登录且系统加密功能正常。");
+  }
+  const buf = safeStorage.encryptString(plaintext);
+  return { __enc: buf.toString("base64") };
+}
+
+function decryptField(field: unknown): string {
+  if (isEncryptedField(field)) {
+    if (!safeStorage.isEncryptionAvailable()) {
+      // 加密不可用时，如果数据看起来是加密的（base64），记录警告并返回空字符串
+      // 避免返回可能的明文数据
+      appendLog("warn", "系统加密服务不可用，无法解密敏感字段", { fieldPreview: field.__enc.slice(0, 20) });
+      return "";
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(field.__enc, "base64"));
+    } catch (error) {
+      // 解密失败，记录错误并返回空字符串
+      appendLog("error", "解密敏感字段失败", { error: (error as Error).message });
+      return "";
+    }
+  }
+  // 旧版明文数据（兼容性处理，但会记录警告）
+  const plaintext = String(field ?? "");
+  if (plaintext.length > 0) {
+    appendLog("warn", "检测到未加密的敏感字段，建议重新保存设置以加密", {});
+  }
+  return plaintext;
+}
+
+function hasPlaintextSecrets(raw: Record<string, unknown>): boolean {
+  const profiles = Array.isArray(raw.apiProfiles) ? raw.apiProfiles : [];
+  for (const profile of profiles) {
+    if (typeof profile === "object" && profile !== null) {
+      for (const key of SENSITIVE_PROFILE_FIELDS) {
+        const val = (profile as Record<string, unknown>)[key];
+        if (typeof val === "string" && val.length > 0 && !isEncryptedField(val)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function encryptSettingsFields(settings: AppSettings): Record<string, unknown> {
+  const raw = { ...settings } as Record<string, unknown>;
+  if (Array.isArray(raw.apiProfiles)) {
+    raw.apiProfiles = raw.apiProfiles.map((p: Record<string, unknown>) => {
+      const encrypted = { ...p };
+      for (const key of SENSITIVE_PROFILE_FIELDS) {
+        const val = p[key];
+        if (typeof val === "string" && val.length > 0) {
+          encrypted[key] = encryptField(val);
+        }
+      }
+      return encrypted;
+    });
+  }
+  for (const key of SENSITIVE_ROOT_FIELDS) {
+    const val = raw[key];
+    if (typeof val === "string" && val.length > 0) {
+      raw[key] = encryptField(val);
+    }
+  }
+  return raw;
+}
+
+function decryptSettingsFields(raw: Record<string, unknown>): Record<string, unknown> {
+  const decrypted = { ...raw };
+  if (Array.isArray(decrypted.apiProfiles)) {
+    decrypted.apiProfiles = decrypted.apiProfiles.map((p: Record<string, unknown>) => {
+      const result = { ...p };
+      for (const key of SENSITIVE_PROFILE_FIELDS) {
+        result[key] = decryptField(p[key]);
+      }
+      return result;
+    });
+  }
+  for (const key of SENSITIVE_ROOT_FIELDS) {
+    decrypted[key] = decryptField(decrypted[key]);
+  }
+  return decrypted;
 }
 
 async function loadWorkbenchState(): Promise<WorkbenchState> {
@@ -152,10 +375,21 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     }
   });
   mainWindow.removeMenu();
+
+  // 导航限制：仅允许开发模式 Vite URL
+  mainWindow.webContents.on("will-navigate", (_event, url) => {
+    if (!isDev || !url.startsWith(process.env.VITE_DEV_SERVER_URL!)) {
+      _event.preventDefault();
+    }
+  });
+  // 阻止 window.open 弹出新窗口
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
   if (isDev) mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL!);
   else mainWindow.loadFile(path.join(__dirname, "../../dist-renderer/index.html"));
 }
@@ -519,6 +753,7 @@ async function walkMedia(root: string, allowed: Set<string>, maxItems = 5000): P
       return;
     }
     for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) await walk(fullPath);
       else if (allowed.has(path.extname(entry.name).toLowerCase())) results.push(fullPath);
@@ -541,6 +776,7 @@ async function walkMediaAndFolders(root: string, allowed: Set<string>, maxItems 
       return;
     }
     for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         folders.push(fullPath);
@@ -558,6 +794,10 @@ async function walkMediaAndFolders(root: string, allowed: Set<string>, maxItems 
 async function scanVideoLibrary(settings: AppSettings, productName: string, colorName: string): Promise<VideoCandidate[]> {
   const root = settings.videoLibraryDir;
   if (!root || !existsSync(root)) throw new Error("请先在设置中选择视频库文件夹。");
+
+  // 路径安全校验
+  validatePathSafety(root);
+
   const allExts = new Set([...videoExts, ...imageExts]);
   const esPath = resolveEverythingEsPath(settings);
   let files: string[];
@@ -642,6 +882,9 @@ function tokenOverlap(a: string, b: string) {
 }
 
 async function latestImageInDirectory(dir: string): Promise<string> {
+  // 路径安全校验
+  validatePathSafety(dir);
+
   const files = await walkMedia(dir, imageExts, 2000);
   const withStats = await Promise.all(
     files.map(async (filePath) => ({ filePath, mtimeMs: (await fs.stat(filePath)).mtimeMs }))
@@ -658,6 +901,36 @@ function imageToDataUrl(filePath: string, maxSide = 720) {
   return resized.toDataURL();
 }
 
+/**
+ * 校验文件路径安全性，防止 FFmpeg 参数注入。
+ * 检查路径中是否包含可能导致命令注入的特殊字符。
+ */
+function validateMediaFilePath(filePath: string): void {
+  if (!filePath) {
+    throw new Error("文件路径不能为空");
+  }
+
+  // 检查文件是否存在
+  if (!existsSync(filePath)) {
+    throw new Error(`文件不存在：${filePath}`);
+  }
+
+  // 检查路径中是否包含危险字符（Windows 命令注入常用字符）
+  const dangerousChars = /[&|^<>;"'`$(){}[\]!]/;
+  if (dangerousChars.test(filePath)) {
+    throw new Error(`安全错误：文件路径包含不安全字符，请重命名文件后重试。路径：${path.basename(filePath)}`);
+  }
+
+  // 检查文件名长度（防止超长路径攻击）
+  const fileName = path.basename(filePath);
+  if (fileName.length > 255) {
+    throw new Error("文件名过长，请重命名后重试");
+  }
+
+  // 应用通用路径安全校验
+  validatePathSafety(filePath);
+}
+
 async function validateVideoInput(ffmpegPath: string, videoPath: string): Promise<{ hasVideo: boolean; hasAudio: boolean; detail: string }> {
   const result = await runProcess(ffmpegPath, ["-hide_banner", "-i", videoPath]);
   const hasVideo = /Stream\s+#\d+:\d+.*Video/i.test(result.output);
@@ -672,15 +945,33 @@ async function renderVideoTask(payload: VideoRenderPayload): Promise<VideoRender
   if (!settings.videoOutputDir) throw new Error("请先选择输出文件夹。");
   await fs.mkdir(settings.videoOutputDir, { recursive: true });
 
+  // 校验输出目录安全性
+  validatePathSafety(settings.videoOutputDir);
+
   if (payload.task.template !== "video-slice") {
     const image = payload.task.imagePath || payload.task.imagePaths[0];
     if (!image || !existsSync(image)) throw new Error(`图片文件不存在：${image || "未选择"}`);
     if (!payload.task.videoPath || !existsSync(payload.task.videoPath)) throw new Error(`视频文件不存在：${payload.task.videoPath || "未选择"}`);
+
+    // 校验媒体文件路径安全性
+    validateMediaFilePath(image);
+    validateMediaFilePath(payload.task.videoPath);
+
     const probe = await validateVideoInput(ffmpegPath, payload.task.videoPath);
     if (!probe.hasVideo) throw new Error("视频文件没有可解码的视频流，请检查文件是否损坏或格式不支持。");
   } else {
     const missing = payload.task.imagePaths.filter(Boolean).filter((p) => !existsSync(p));
     if (missing.length) throw new Error(`以下图片文件不存在：${missing.map((p) => path.basename(p)).join("、")}`);
+
+    // 校验所有图片路径安全性
+    for (const imagePath of payload.task.imagePaths.filter(Boolean)) {
+      validateMediaFilePath(imagePath);
+    }
+  }
+
+  // 校验音乐文件路径（如果有）
+  if (payload.task.musicPath) {
+    validateMediaFilePath(payload.task.musicPath);
   }
 
   const outputPath = await uniqueOutputPath(settings.videoOutputDir, payload.task.outputName || `${payload.task.productName}-${payload.task.colorName}`);
@@ -1124,6 +1415,15 @@ function imageSignature(image: Electron.NativeImage) {
   return `${size.width}x${size.height}:${image.toPNG().byteLength}`;
 }
 
+/** 防止 Excel/CSV 公式注入：以 = + - @ 及制表符/回车开头的文本前置单引号，强制为纯文本 */
+function sanitizeCellText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  if (text === "") return null;
+  if (/^[=+\-@\t\r]/.test(text)) return `'${text}`;
+  return text;
+}
+
 async function exportWorkbook(payload: ExportPayload): Promise<ExportResult> {
   const dialogOptions = {
     title: "导出支付宝返款表",
@@ -1150,10 +1450,10 @@ async function exportWorkbook(payload: ExportPayload): Promise<ExportResult> {
     const sourceRow = worksheet.getRow(index < 22 ? startRow + index : 25);
     [1, 2, 3, 4, 5].forEach((col) => (targetRow.getCell(col).style = { ...sourceRow.getCell(col).style }));
     targetRow.getCell(1).value = index + 1;
-    targetRow.getCell(2).value = rows[index].account;
-    targetRow.getCell(3).value = rows[index].name;
+    targetRow.getCell(2).value = sanitizeCellText(rows[index].account);
+    targetRow.getCell(3).value = sanitizeCellText(rows[index].name);
     targetRow.getCell(4).value = rows[index].amount === "" ? null : Number(rows[index].amount);
-    targetRow.getCell(5).value = rows[index].remark || null;
+    targetRow.getCell(5).value = sanitizeCellText(rows[index].remark);
     targetRow.commit();
   }
 
@@ -1194,8 +1494,8 @@ let reviewFileCache: {
   fileIndex: ReviewFileIndex[];
   folderIndex: ReviewFolderIndex[];
   cachedAt: number;
+  indexedAt: number;
 } | null = null;
-const REVIEW_CACHE_TTL = 300_000;
 
 function buildReviewIndex(root: string, files: string[], folders: string[]): { fileIndex: ReviewFileIndex[]; folderIndex: ReviewFolderIndex[] } {
   const folderChildMap = new Map<string, string[]>();
@@ -1204,38 +1504,10 @@ function buildReviewIndex(root: string, files: string[], folders: string[]): { f
     const bucket = folderChildMap.get(parent);
     if (bucket) { if (bucket.length < 12) bucket.push(filePath); }
     else folderChildMap.set(parent, [filePath]);
-
-    const relative = path.relative(root, filePath);
-    const fileName = path.basename(filePath);
-    let mtimeMs = 0;
-    try { mtimeMs = statSync(filePath).mtimeMs; } catch {}
-    return {
-      path: filePath,
-      name: fileName,
-      relative,
-      fileText: normalizeMatchText(fileName),
-      pathText: normalizeMatchText(relative),
-      folderNorm: normalizeMatchText(path.dirname(relative)),
-      depth: relative.split(/[\\/]/).length - 1,
-      mtimeMs
-    };
+    return buildFileIndexEntry(root, filePath);
   });
 
-  const folderIndex: ReviewFolderIndex[] = folders.map((folderPath) => {
-    const relative = path.relative(root, folderPath);
-    let mtimeMs = 0;
-    try { mtimeMs = statSync(folderPath).mtimeMs; } catch {}
-    return {
-      path: folderPath,
-      name: path.basename(folderPath),
-      relative,
-      nameText: normalizeMatchText(path.basename(folderPath)),
-      pathText: normalizeMatchText(relative),
-      depth: relative.split(/[\\/]/).length - 1,
-      children: folderChildMap.get(folderPath) ?? [],
-      mtimeMs
-    };
-  });
+  const folderIndex: ReviewFolderIndex[] = folders.map((folderPath) => buildFolderIndexEntry(root, folderPath, folderChildMap));
 
   return { fileIndex, folderIndex };
 }
@@ -1254,11 +1526,29 @@ function resolveEverythingEsPath(settings: AppSettings): string {
   return candidates.find((p) => existsSync(p)) ?? "";
 }
 
+/**
+ * 过滤 Everything 搜索查询，防止命令/语法注入。
+ * Everything CLI 支持 regex:/path:/size:/ext: 等函数语法（依赖冒号）和通配符、布尔操作符。
+ * 采用白名单：只保留字母、数字、中文、空格、连字符和下划线，移除其余所有字符。
+ */
+function sanitizeEverythingQuery(query: string): string {
+  return query
+    .replace(/[^\p{L}\p{N}\s_-]/gu, " ") // 仅保留 Unicode 字母/数字/空格/下划线/连字符
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200); // 限制长度，防止超长查询
+}
+
 function searchWithEverything(esPath: string, root: string, query: string, exts: Set<string>, maxResults = 500): Promise<string[]> {
   return new Promise((resolve) => {
     const extList = [...exts].map((e) => e.replace(".", "")).join(";");
-    const args = ["-n", String(maxResults), "-path", root, `ext:${extList}`];
-    if (query.trim()) args.push(query.trim());
+    // root 由内部白名单目录提供，仍做规范化处理
+    const safeRoot = root ? path.resolve(root) : "";
+    const args = ["-n", String(maxResults), ...(safeRoot ? ["-path", safeRoot] : []), `ext:${extList}`];
+    if (query.trim()) {
+      const clean = sanitizeEverythingQuery(query);
+      if (clean) args.push(clean);
+    }
     execFile(esPath, args, { timeout: 10_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
       if (error) { resolve([]); return; }
       const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
@@ -1282,189 +1572,101 @@ function safeMtimeMs(filePath: string): number {
   try { return statSync(filePath).mtimeMs; } catch { return 0; }
 }
 
+/** 截断 API 错误响应体，防止敏感信息进入日志或抛到前端 */
+async function truncatedErrorText(response: Response): Promise<string> {
+  try {
+    const text = await response.text();
+    const truncated = text.length > 200 ? text.slice(0, 200) + "..." : text;
+    // 应用脱敏，防止错误信息中泄露敏感数据
+    return String(sanitizeForLog(truncated));
+  } catch {
+    return "(无法读取响应体)";
+  }
+}
+
+/** 校验 API Base URL 使用 HTTPS，非 HTTPS 时抛出错误 */
+function validateApiUrl(url: string): void {
+  if (!url) return;
+  if (!url.startsWith("https://") && !url.startsWith("http://localhost") && !url.startsWith("http://127.0.0.1")) {
+    appendLog("error", "API Base URL 必须使用 HTTPS 协议", { url: url.slice(0, 50) });
+    throw new Error("安全错误：API Base URL 必须使用 HTTPS 协议，以保护 API Key 不被窃取。本地测试可使用 localhost 或 127.0.0.1。");
+  }
+}
+
 async function scanReviewAssets(root: string, query: string, settings?: AppSettings, event?: Electron.IpcMainInvokeEvent): Promise<ReviewSearchResult[]> {
   if (!root || !existsSync(root)) throw new Error("请先选择收评助手根目录。");
 
-  const scoringEnabled = settings?.reviewScoringEnabled ?? true;
+  // 路径安全校验
+  validatePathSafety(root);
+
   const esPath = settings ? resolveEverythingEsPath(settings) : "";
+
+  // Everything path — blazing fast, no limits, no scoring
   if (esPath && query.trim()) {
-    const esResults = await searchWithEverything(esPath, root, query.trim(), imageExts, 500);
+    if (event) event.sender.send("review:scanProgress", { scanned: 0, currentDir: root, phase: "everything" });
+    const esResults = await searchWithEverything(esPath, root, query.trim(), imageExts, 99999);
     if (esResults.length > 0) {
-      const thumbPaths = esResults.slice(0, 60);
-      const thumbMap = batchThumbnails(thumbPaths, 180);
-      return esResults.map((filePath, index) => ({
-        path: filePath,
-        name: path.basename(filePath),
-        kind: "image" as const,
-        score: scoringEnabled ? Math.max(100 - index, 10) : 0,
-        reason: scoringEnabled ? "Everything" : "未启用评分",
-        mtimeMs: safeMtimeMs(filePath),
-        thumbnailDataUrl: thumbMap.get(filePath)
-      }));
+      if (event) event.sender.send("review:scanProgress", { scanned: esResults.length, currentDir: "", phase: "done" });
+      return esResults
+        .map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "", mtimeMs: safeMtimeMs(fp) }))
+        .sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
     }
+    // Everything returned nothing — fall through to disk cache
   }
 
+  // Fallback path — use disk index with incremental update
   const now = Date.now();
-  if (!reviewFileCache || reviewFileCache.root !== root || now - reviewFileCache.cachedAt > REVIEW_CACHE_TTL) {
+  if (!reviewFileCache || reviewFileCache.root !== root) {
     const disk = await loadReviewIndexFile(root);
-    let cacheValid = false;
-    if (disk) {
-      try {
-        const rootStat = statSync(root);
-        const indexPath = reviewIndexFilePath(root);
-        const indexStat = statSync(indexPath);
-        cacheValid = rootStat.mtimeMs <= indexStat.mtimeMs;
-      } catch { cacheValid = false; }
-    }
-    if (disk && cacheValid) {
-      reviewFileCache = { root, fileIndex: disk.fileIndex, folderIndex: disk.folderIndex, cachedAt: now };
+    if (disk && disk.fileIndex.length > 0) {
+      // Try incremental update from existing index
       if (event) event.sender.send("review:scanProgress", { scanned: disk.fileIndex.length, currentDir: "", phase: "loaded-cache" });
+      const result = await walkMediaIncremental(root, imageExts, 50000, disk.fileIndex, disk.indexedAt, (scanned, currentDir, phase) => {
+        if (event) event.sender.send("review:scanProgress", { scanned, currentDir, phase });
+      });
+      reviewFileCache = { root, fileIndex: result.fileIndex, folderIndex: result.folderIndex, cachedAt: now, indexedAt: now };
+      void saveReviewIndexFile(root, result.fileIndex, result.folderIndex, now);
+      if (result.added > 0 || result.removed > 0) {
+        if (event) event.sender.send("review:scanProgress", { scanned: result.fileIndex.length, currentDir: "", phase: "done" });
+      }
     } else {
+      // No existing index — full scan
       if (event) event.sender.send("review:scanProgress", { scanned: 0, currentDir: root, phase: "start" });
       const { files, folders } = await walkMediaAndFoldersWithProgress(root, imageExts, 50000, (scanned, currentDir) => {
         if (event) event.sender.send("review:scanProgress", { scanned, currentDir, phase: "walking" });
       });
       const { fileIndex, folderIndex } = buildReviewIndex(root, files, folders);
-      reviewFileCache = { root, fileIndex, folderIndex, cachedAt: now };
-      void saveReviewIndexFile(root, fileIndex, folderIndex);
+      reviewFileCache = { root, fileIndex, folderIndex, cachedAt: now, indexedAt: now };
+      void saveReviewIndexFile(root, fileIndex, folderIndex, now);
       if (event) event.sender.send("review:scanProgress", { scanned: files.length, currentDir: "", phase: "indexed" });
     }
   }
   const { fileIndex, folderIndex } = reviewFileCache;
-  const terms = buildMatchTerms(query);
+  const q = query.trim().toLowerCase();
+  const terms = q ? q.split(/[\s,，、]+/).filter(Boolean) : [];
 
-  if (!scoringEnabled) {
-    const matchesImage = (item: ReviewFileIndex) => terms.length === 0 || terms.some((term) => item.fileText.includes(term) || item.folderNorm.includes(term) || item.pathText.includes(term));
-    const matchesFolder = (item: ReviewFolderIndex) => terms.length === 0 || terms.some((term) => item.nameText.includes(term) || item.pathText.includes(term));
-    const topImages = fileIndex
-      .filter(matchesImage)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .slice(0, 80)
-      .map((item) => ({ path: item.path, name: item.name, kind: "image" as const, score: 0, reason: "未启用评分", mtimeMs: item.mtimeMs }));
-    const topFolders = folderIndex
-      .filter((item) => item.children.length > 0 && matchesFolder(item))
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .slice(0, 30)
-      .map((item) => ({
-        path: item.path,
-        name: item.name,
-        kind: "folder" as const,
-        score: 0,
-        reason: "未启用评分",
-        mtimeMs: item.mtimeMs,
-        children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片", mtimeMs: safeMtimeMs(fp) }))
-      }));
-    const merged: ReviewSearchResult[] = [...topImages, ...topFolders].slice(0, 120);
-    const thumbPaths = new Set<string>();
-    for (const item of merged.slice(0, 60)) {
-      if (item.kind === "image") thumbPaths.add(item.path);
-      else if (item.children) item.children.slice(0, 4).forEach((c) => thumbPaths.add(c.path));
-    }
-    const thumbMap = batchThumbnails([...thumbPaths], 180);
-    for (const item of merged) {
-      if (item.kind === "image") item.thumbnailDataUrl = thumbMap.get(item.path);
-      else if (item.children) {
-        for (const child of item.children) child.thumbnailDataUrl = thumbMap.get(child.path);
-        item.thumbnailDataUrl = item.children[0]?.thumbnailDataUrl;
-      }
-    }
-    return merged;
-  }
+  const matchesImage = (item: ReviewFileIndex) => terms.length === 0 || terms.some((term) => item.fileText.includes(term) || item.folderNorm.includes(term) || item.pathText.includes(term));
 
-  if (event) event.sender.send("review:scanProgress", { scanned: fileIndex.length, currentDir: "", phase: "scoring" });
+  const images: ReviewSearchResult[] = fileIndex
+    .filter(matchesImage)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .map((item) => ({ path: item.path, name: item.name, kind: "image" as const, score: 0, reason: "", mtimeMs: item.mtimeMs }));
 
-  const scoredImages = fileIndex.map((item) => {
-    const candidate = scoreIndexedFile(item, terms);
-    return { path: item.path, name: item.name, kind: "image" as const, score: candidate.score, reason: candidate.reason, mtimeMs: item.mtimeMs };
-  });
-  const topImages = scoredImages
-    .filter((item) => item.score >= 28)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 80);
-
-  const scoredFolders = folderIndex.map((item) => {
-    const folderScore = scoreIndexedFolder(item, terms);
-    return {
-      path: item.path,
-      name: item.name,
-      kind: "folder" as const,
-      score: folderScore.score,
-      reason: folderScore.reason,
-      mtimeMs: item.mtimeMs,
-      children: item.children.map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "文件夹内图片", mtimeMs: safeMtimeMs(fp) }))
-    };
-  });
-  const topFolders = scoredFolders
-    .filter((item) => item.score >= 38 && item.children.length > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 30);
-
-  const merged: ReviewSearchResult[] = [...topImages, ...topFolders]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 120);
-
-  const thumbPaths = new Set<string>();
-  for (const item of merged.slice(0, 60)) {
-    if (item.kind === "image") thumbPaths.add(item.path);
-    else if (item.children) item.children.slice(0, 4).forEach((c) => thumbPaths.add(c.path));
-  }
-  const thumbMap = batchThumbnails([...thumbPaths], 180);
-  for (const item of merged) {
-    if (item.kind === "image") item.thumbnailDataUrl = thumbMap.get(item.path);
-    else if (item.children) {
-      for (const child of item.children) child.thumbnailDataUrl = thumbMap.get(child.path);
-      item.thumbnailDataUrl = item.children[0]?.thumbnailDataUrl;
-    }
-  }
-  return merged;
-}
-
-function scoreIndexedFile(item: ReviewFileIndex, terms: string[]) {
-  let score = 0;
-  const reasons: string[] = [];
-  for (const term of terms) {
-    if (!term) continue;
-    if (item.fileText.includes(term)) { score += /\d/.test(term) ? 28 : 24; reasons.push(`文件名命中 ${term}`); }
-    else if (item.folderNorm.includes(term)) { score += /\d/.test(term) ? 24 : 20; reasons.push(`文件夹命中 ${term}`); }
-    else if (item.pathText.includes(term)) { score += 12; reasons.push(`路径命中 ${term}`); }
-    else { const overlap = tokenOverlap(term, item.pathText); if (overlap > 0.45) score += Math.round(overlap * 16); }
-  }
-  score += Math.max(0, 10 - item.depth);
-  score += 4;
-  return { score, reason: reasons.slice(0, 3).join("；") || "路径文字相似" };
-}
-
-function scoreIndexedFolder(item: ReviewFolderIndex, terms: string[]) {
-  let score = 0;
-  const reasons: string[] = [];
-  for (const term of terms) {
-    if (!term) continue;
-    if (item.nameText.includes(term)) {
-      score += /\d/.test(term) ? 32 : 26;
-      reasons.push(`文件夹命中 ${term}`);
-    } else if (item.pathText.includes(term)) {
-      score += /\d/.test(term) ? 22 : 18;
-      reasons.push(`路径命中 ${term}`);
-    } else {
-      const overlap = tokenOverlap(term, item.pathText);
-      if (overlap > 0.45) score += Math.round(overlap * 14);
-    }
-  }
-  score += Math.max(0, 12 - item.depth);
-  return { score, reason: reasons.slice(0, 3).join("；") || "文件夹名称相似" };
-}
-
-function batchThumbnails(paths: string[], maxSide: number): Map<string, string | undefined> {
-  const map = new Map<string, string | undefined>();
-  for (const p of paths) map.set(p, imageToDataUrl(p, maxSide));
-  return map;
+  return images.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
 }
 
 async function loadReviewThumbnails(paths: string[]): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   for (const p of paths.slice(0, 40)) {
-    const url = imageToDataUrl(p, 280);
-    if (url) result[p] = url;
+    try {
+      // 路径安全校验
+      validatePathSafety(p);
+      const url = imageToDataUrl(p, 280);
+      if (url) result[p] = url;
+    } catch (error) {
+      // 跳过不安全的路径
+      await appendLog("warn", "loadReviewThumbnails 跳过不安全路径", { path: p, error: (error as Error).message });
+    }
   }
   return result;
 }
@@ -1475,9 +1677,16 @@ async function loadReviewThumbnailBatch(paths: string[], size = 220): Promise<Re
   for (let i = 0; i < limited.length; i++) {
     const p = limited[i];
     if (!existsSync(p)) continue;
-    const url = imageToDataUrl(p, size);
-    if (url) result[p] = url;
-    if (i % 6 === 5) await new Promise((resolve) => setImmediate(resolve));
+    try {
+      // 路径安全校验
+      validatePathSafety(p);
+      const url = imageToDataUrl(p, size);
+      if (url) result[p] = url;
+      if (i % 6 === 5) await new Promise((resolve) => setImmediate(resolve));
+    } catch (error) {
+      // 跳过不安全的路径
+      await appendLog("warn", "loadReviewThumbnailBatch 跳过不安全路径", { path: p, error: (error as Error).message });
+    }
   }
   return result;
 }
@@ -1491,9 +1700,10 @@ async function rebuildReviewIndex(root: string, event: Electron.IpcMainInvokeEve
     event.sender.send("review:scanProgress", { scanned, currentDir, phase: "walking" });
   });
   const { fileIndex, folderIndex } = buildReviewIndex(root, files, folders);
-  reviewFileCache = { root, fileIndex, folderIndex, cachedAt: Date.now() };
-  await saveReviewIndexFile(root, fileIndex, folderIndex);
-  event.sender.send("review:scanProgress", { scanned: files.length, currentDir: "", phase: "done", elapsedMs: Date.now() - startedAt });
+  const now = Date.now();
+  reviewFileCache = { root, fileIndex, folderIndex, cachedAt: now, indexedAt: now };
+  await saveReviewIndexFile(root, fileIndex, folderIndex, now);
+  event.sender.send("review:scanProgress", { scanned: files.length, currentDir: "", phase: "done", elapsedMs: now - startedAt });
   return { ok: true, total: files.length };
 }
 
@@ -1529,26 +1739,30 @@ function reviewIndexFilePath(root: string): string {
   return path.join(app.getPath("userData"), `review-index-${safe}.json`);
 }
 
-async function saveReviewIndexFile(root: string, fileIndex: ReviewFileIndex[], folderIndex: ReviewFolderIndex[]): Promise<void> {
+async function saveReviewIndexFile(root: string, fileIndex: ReviewFileIndex[], folderIndex: ReviewFolderIndex[], indexedAt: number): Promise<void> {
   try {
     const filePath = reviewIndexFilePath(root);
-    const payload = { root, savedAt: Date.now(), fileIndex, folderIndex };
+    const payload = { root, savedAt: Date.now(), indexedAt, fileIndex, folderIndex };
     await fs.writeFile(filePath, JSON.stringify(payload), "utf-8");
   } catch (error) {
     appendLog("warn", "保存收评索引失败", { message: (error as Error).message });
   }
 }
 
-async function loadReviewIndexFile(root: string): Promise<{ fileIndex: ReviewFileIndex[]; folderIndex: ReviewFolderIndex[] } | null> {
+async function loadReviewIndexFile(root: string): Promise<{ fileIndex: ReviewFileIndex[]; folderIndex: ReviewFolderIndex[]; indexedAt: number } | null> {
   try {
     const filePath = reviewIndexFilePath(root);
     if (!existsSync(filePath)) return null;
     const stats = await fs.stat(filePath);
     if (Date.now() - stats.mtimeMs > REVIEW_INDEX_DISK_TTL) return null;
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as { root: string; fileIndex?: ReviewFileIndex[]; folderIndex?: ReviewFolderIndex[] };
+    const parsed = JSON.parse(raw) as { root: string; indexedAt?: number; savedAt?: number; fileIndex?: ReviewFileIndex[]; folderIndex?: ReviewFolderIndex[] };
     if (parsed.root !== root) return null;
-    return { fileIndex: parsed.fileIndex || [], folderIndex: parsed.folderIndex || [] };
+    return {
+      fileIndex: parsed.fileIndex || [],
+      folderIndex: parsed.folderIndex || [],
+      indexedAt: parsed.indexedAt || parsed.savedAt || stats.mtimeMs
+    };
   } catch {
     return null;
   }
@@ -1574,6 +1788,7 @@ async function walkMediaAndFoldersWithProgress(
       return;
     }
     for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         folders.push(fullPath);
@@ -1597,6 +1812,191 @@ async function walkMediaAndFoldersWithProgress(
   return { files, folders };
 }
 
+function buildFileIndexEntry(root: string, filePath: string): ReviewFileIndex {
+  const relative = path.relative(root, filePath);
+  const fileName = path.basename(filePath);
+  let mtimeMs = 0;
+  try { mtimeMs = statSync(filePath).mtimeMs; } catch {}
+  return {
+    path: filePath,
+    name: fileName,
+    relative,
+    fileText: normalizeMatchText(fileName),
+    pathText: normalizeMatchText(relative),
+    folderNorm: normalizeMatchText(path.dirname(relative)),
+    depth: relative.split(/[\\/]/).length - 1,
+    mtimeMs
+  };
+}
+
+async function walkMediaIncremental(
+  root: string,
+  allowed: Set<string>,
+  maxItems: number,
+  existingFileIndex: ReviewFileIndex[],
+  indexedAt: number,
+  onProgress?: (scanned: number, currentDir: string, phase: string) => void
+): Promise<{ fileIndex: ReviewFileIndex[]; folderIndex: ReviewFolderIndex[]; added: number; reused: number; removed: number }> {
+  // Build dir→existing-files lookup map
+  const existingByDir = new Map<string, ReviewFileIndex[]>();
+  for (const entry of existingFileIndex) {
+    const dir = path.dirname(entry.path);
+    const bucket = existingByDir.get(dir);
+    if (bucket) bucket.push(entry);
+    else existingByDir.set(dir, [entry]);
+  }
+
+  const newFileIndex: ReviewFileIndex[] = [];
+  const visitedFilePaths = new Set<string>();
+  const visitedDirPaths = new Set<string>();
+  let reused = 0;
+  let added = 0;
+  let lastReport = Date.now();
+
+  async function walk(dir: string) {
+    if (newFileIndex.length >= maxItems) return;
+    visitedDirPaths.add(dir);
+
+    let dirMtimeMs = 0;
+    try { dirMtimeMs = statSync(dir).mtimeMs; } catch { return; }
+
+    const existingFiles = existingByDir.get(dir);
+    const canReuse = existingFiles !== undefined && dirMtimeMs <= indexedAt;
+
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch { return; }
+
+    if (canReuse && existingFiles) {
+      // Directory unchanged — reuse all file index entries, skip per-file stat
+      const existingSet = new Set(existingFiles.map((e) => e.path));
+      for (const entry of existingFiles) {
+        if (newFileIndex.length >= maxItems) break;
+        newFileIndex.push(entry);
+        visitedFilePaths.add(entry.path);
+      }
+      reused += existingFiles.length;
+
+      // Recurse into subdirectories (only those that still exist)
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) {
+          await walk(path.join(dir, entry.name));
+        } else if (allowed.has(path.extname(entry.name).toLowerCase())) {
+          // File exists on disk but wasn't in previous index — new file in "unchanged" dir
+          // (can happen if dir mtime granularity didn't catch it, or clock skew)
+          const fullPath = path.join(dir, entry.name);
+          if (!existingSet.has(fullPath) && newFileIndex.length < maxItems) {
+            newFileIndex.push(buildFileIndexEntry(root, fullPath));
+            visitedFilePaths.add(fullPath);
+            added++;
+          }
+        }
+      }
+    } else {
+      // Directory changed or new — readdir and compare with existing entries
+      const existingMap = new Map<string, ReviewFileIndex>();
+      if (existingFiles) {
+        for (const e of existingFiles) existingMap.set(e.path, e);
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+        } else if (allowed.has(path.extname(entry.name).toLowerCase())) {
+          if (newFileIndex.length >= maxItems) break;
+
+          const prev = existingMap.get(fullPath);
+          if (prev) {
+            // File existed before — check if mtime changed
+            let currentMtime = 0;
+            try { currentMtime = statSync(fullPath).mtimeMs; } catch {}
+            if (currentMtime === prev.mtimeMs) {
+              newFileIndex.push(prev);
+              reused++;
+            } else {
+              newFileIndex.push(buildFileIndexEntry(root, fullPath));
+              added++;
+            }
+          } else {
+            // New file
+            newFileIndex.push(buildFileIndexEntry(root, fullPath));
+            added++;
+          }
+          visitedFilePaths.add(fullPath);
+
+          if (newFileIndex.length % 200 === 0) {
+            const now = Date.now();
+            if (onProgress && now - lastReport > 80) {
+              onProgress(newFileIndex.length, dir, "walking");
+              lastReport = now;
+            }
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+        }
+      }
+    }
+  }
+
+  if (root && existsSync(root)) await walk(root);
+
+  // Count removed entries (in old index but no longer on disk)
+  let removed = 0;
+  for (const entry of existingFileIndex) {
+    if (!visitedFilePaths.has(entry.path)) removed++;
+  }
+
+  // Build folder index from visited directories
+  const folderChildMap = new Map<string, string[]>();
+  for (const file of newFileIndex) {
+    const parent = path.dirname(file.path);
+    const bucket = folderChildMap.get(parent);
+    if (bucket) { if (bucket.length < 12) bucket.push(file.path); }
+    else folderChildMap.set(parent, [file.path]);
+  }
+
+  const newFolderIndex: ReviewFolderIndex[] = [];
+  for (const dirPath of visitedDirPaths) {
+    if (dirPath === root) continue;
+    const relative = path.relative(root, dirPath);
+    let mtimeMs = 0;
+    try { mtimeMs = statSync(dirPath).mtimeMs; } catch {}
+    newFolderIndex.push({
+      path: dirPath,
+      name: path.basename(dirPath),
+      relative,
+      nameText: normalizeMatchText(path.basename(dirPath)),
+      pathText: normalizeMatchText(relative),
+      depth: relative.split(/[\\/]/).length - 1,
+      children: folderChildMap.get(dirPath) ?? [],
+      mtimeMs
+    });
+  }
+
+  if (onProgress) onProgress(newFileIndex.length, "", "indexed");
+
+  return { fileIndex: newFileIndex, folderIndex: newFolderIndex, added, reused, removed };
+}
+
+function buildFolderIndexEntry(root: string, folderPath: string, childMap: Map<string, string[]>): ReviewFolderIndex {
+  const relative = path.relative(root, folderPath);
+  let mtimeMs = 0;
+  try { mtimeMs = statSync(folderPath).mtimeMs; } catch {}
+  return {
+    path: folderPath,
+    name: path.basename(folderPath),
+    relative,
+    nameText: normalizeMatchText(path.basename(folderPath)),
+    pathText: normalizeMatchText(relative),
+    depth: relative.split(/[\\/]/).length - 1,
+    children: childMap.get(folderPath) ?? [],
+    mtimeMs
+  };
+}
+
 async function enhanceTitlePoolWithLLM(
   settings: AppSettings,
   payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }
@@ -1606,6 +2006,7 @@ async function enhanceTitlePoolWithLLM(
     if (!normalized.titleAiSelectionEnabled) return { ok: false, selected: [], suggested: [], reason: "已关闭 AI 选词" };
     const profile = getReviewApiProfile(normalized);
     if (!profile.apiBaseUrl || !profile.apiKey) return { ok: false, selected: [], suggested: [], reason: "未配置 API" };
+    validateApiUrl(profile.apiBaseUrl);
     const top = (payload.pool || []).slice(0, 30).map((t) => t.text).filter(Boolean);
     if (top.length === 0) return { ok: false, selected: [], suggested: [], reason: "候选词为空" };
     const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
@@ -1634,7 +2035,7 @@ async function enhanceTitlePoolWithLLM(
       })
     });
     if (!response.ok) {
-      const text = await response.text();
+      const text = await truncatedErrorText(response);
       throw new Error(`HTTP ${response.status} ${text.slice(0, 200)}`);
     }
     const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
@@ -1712,40 +2113,89 @@ async function callRecognitionChatCompletions(
     for (const profile of profiles) {
       const profileSettings = normalizeSettings({ ...normalized, activeApiProfileId: profile.id });
       const profileModel = model === normalized.textModel ? profile.textModel : model === normalized.visionModel ? profile.visionModel : model;
+      const isAnthropic = profile.apiType === "anthropic";
+
+      // 校验 HTTPS
+      try {
+        validateApiUrl(profileSettings.apiBaseUrl);
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : "API URL 校验失败";
+        continue; // 跳过此 profile，尝试下一个
+      }
+
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 45000);
         try {
-          const endpoint = `${profileSettings.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
-          const response = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${profileSettings.apiKey}`
-            },
-            signal: controller.signal,
-            body: JSON.stringify({
+          if (isAnthropic) {
+            const baseUrl = profileSettings.apiBaseUrl.replace(/\/$/, "");
+            const endpoint = baseUrl.endsWith("/v1") ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`;
+            const sysMsg = (messages as Array<{ role: string; content: string }>).find((m) => m.role === "system");
+            const chatMessages = (messages as Array<{ role: string; content: string }>).filter((m) => m.role !== "system");
+            const body: Record<string, unknown> = {
               model: profileModel,
-              temperature: 0,
-              response_format: { type: "json_object" },
-              messages
-            })
-          });
+              max_tokens: 4096,
+              messages: chatMessages.map((m) => ({ role: m.role, content: m.content }))
+            };
+            if (sysMsg) body.system = sysMsg.content;
 
-          if (!response.ok) {
-            const text = await response.text();
-            lastError = `模型接口请求失败：${response.status} ${text}`;
-            if (attempt < maxAttempts && shouldRetryModelRequest(response.status)) {
-              await waitForModelRetry(500 * 2 ** (attempt - 1));
-              continue;
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": profileSettings.apiKey,
+                "anthropic-version": ANTHROPIC_API_VERSION
+              },
+              signal: controller.signal,
+              body: JSON.stringify(body)
+            });
+
+            if (!response.ok) {
+              const text = await truncatedErrorText(response);
+              lastError = `Anthropic API 请求失败：${response.status} ${text}`;
+              if (attempt < maxAttempts && shouldRetryModelRequest(response.status)) {
+                await waitForModelRetry(500 * 2 ** (attempt - 1));
+                continue;
+              }
+              break;
             }
-            break;
-          }
 
-          const data = await response.json();
-          const content = data?.choices?.[0]?.message?.content;
-          if (!content) throw new Error("模型没有返回可解析内容。");
-          return JSON.parse(content);
+            const data = await response.json();
+            const textContent = data?.content?.[0]?.text;
+            if (!textContent) throw new Error("Anthropic 没有返回可解析内容。");
+            return JSON.parse(textContent);
+          } else {
+            const endpoint = `${profileSettings.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${profileSettings.apiKey}`
+              },
+              signal: controller.signal,
+              body: JSON.stringify({
+                model: profileModel,
+                temperature: 0,
+                response_format: { type: "json_object" },
+                messages
+              })
+            });
+
+            if (!response.ok) {
+              const text = await truncatedErrorText(response);
+              lastError = `模型接口请求失败：${response.status} ${text}`;
+              if (attempt < maxAttempts && shouldRetryModelRequest(response.status)) {
+                await waitForModelRetry(500 * 2 ** (attempt - 1));
+                continue;
+              }
+              break;
+            }
+
+            const data = await response.json();
+            const content = data?.choices?.[0]?.message?.content;
+            if (!content) throw new Error("模型没有返回可解析内容。");
+            return JSON.parse(content);
+          }
         } catch (error) {
           lastError = error instanceof Error ? error.message : "模型接口请求失败";
           if (attempt < maxAttempts) {
@@ -1862,10 +2312,10 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
   const normalizedSettings = normalizeSettings(settings);
   const profile = getReviewApiProfile(normalizedSettings);
   if (!profile.apiBaseUrl || !profile.apiKey) throw new Error("请先在设置中填写 API Base URL 和 API Key。");
-  const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
+  validateApiUrl(profile.apiBaseUrl);
+  const isAnthropic = profile.apiType === "anthropic";
   const targetLength = Math.min(100, Math.max(30, Math.round(Number(options.targetLength) || normalizedSettings.reviewTargetLength)));
   const thinkingMode = options.thinkingMode || normalizedSettings.reviewThinkingMode;
-  const thinkingEffort = options.thinkingEffort || normalizedSettings.reviewThinkingEffort;
 
   const allAngles = [
     "面料与体感（触感、透气性、柔软度、亲肤感）",
@@ -1897,7 +2347,7 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
     "- 6条评价之间必须在句式结构、开场白、侧重点和收尾方式上明显不同",
     "- 杜绝千篇一律的模板感，禁止出现相似的开头或句式",
     `- 每条评价尽量接近 ${targetLength} 个中文字，允许自然浮动 20%，不要硬凑字数`,
-    `- 思考模式：${thinkingMode}；思考程度：${thinkingEffort}。先在内部规划角度差异，再只输出最终文案。`
+    `- 思考深度：${thinkingMode === "on" ? "深度思考" : thinkingMode === "auto" ? "自动" : "关闭"}。先在内部规划角度差异，再只输出最终文案。`
   ].join("\n");
 
   const prompt = [
@@ -1907,14 +2357,13 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
     `商品补充描述：${options.productDescription || "无"}`,
     "",
     "【风格参数】",
-    `Emoji 使用程度（0无~5多）：${options.emojiLevel}`,
     `专业程度（0口语化~5专业）：${options.professionalLevel}`,
     `买家视角真实感（0一般~5很强）：${options.buyerLevel}`,
     `语气夸张程度（0朴素~5夸张）：${options.exaggerationLevel}`,
     `场景化表达（0弱~5强）：${options.sceneLevel}`,
     `提到性价比：${options.mentionValue ? "是" : "否"}`,
     `目标字数：每条约 ${targetLength} 字`,
-    `思考模式：${thinkingMode}，思考程度：${thinkingEffort}`,
+    `思考模式：${thinkingMode === "on" ? "开启" : thinkingMode === "auto" ? "自动" : "关闭"}`,
     "",
     "【本批次多样性要求】",
     `本次 6 条文案请分别从以下角度切入（每条选一个不同角度）：`,
@@ -1927,39 +2376,89 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
 
   const customPrompt = normalizedSettings.reviewCustomPrompt?.trim();
   const finalSystemPrompt = customPrompt ? `${systemPrompt}\n\n用户自定义要求：\n${customPrompt}` : systemPrompt;
-  const requestBody: Record<string, unknown> = {
-    model: profile.textModel || settings.textModel,
-    temperature: thinkingMode === "deep" ? 0.82 : thinkingMode === "fast" ? 0.75 : 0.92,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: finalSystemPrompt },
-      { role: "user", content: prompt }
-    ]
-  };
-  if (thinkingMode !== "off") requestBody.reasoning_effort = thinkingEffort;
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${profile.apiKey}` },
-    body: JSON.stringify(requestBody)
-  });
-  if (!response.ok) throw new Error(`AI 生成失败：${response.status} ${await response.text()}`);
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  const parsed = JSON.parse(content || "{}");
-  return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, 8) : [] };
+  if (isAnthropic) {
+    const baseUrl = profile.apiBaseUrl.replace(/\/$/, "");
+    const endpoint = baseUrl.endsWith("/v1") ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`;
+    const body: Record<string, unknown> = {
+      model: profile.textModel || settings.textModel,
+      max_tokens: 4096,
+      temperature: 0.88,
+      system: finalSystemPrompt,
+      messages: [{ role: "user", content: prompt }]
+    };
+    if (thinkingMode === "on") body.thinking = { type: "enabled", budget_tokens: 4096 };
+    else if (thinkingMode === "auto") body.thinking = { type: "enabled", budget_tokens: 2048 };
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": profile.apiKey,
+        "anthropic-version": ANTHROPIC_API_VERSION
+      },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) throw new Error(`Anthropic AI 生成失败：${response.status} ${await truncatedErrorText(response)}`);
+    const data = await response.json();
+    const textContent = data?.content?.[0]?.text;
+    const parsed = JSON.parse(textContent || "{}");
+    return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, 8) : [] };
+  } else {
+    const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
+    const requestBody: Record<string, unknown> = {
+      model: profile.textModel || settings.textModel,
+      temperature: 0.88,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: finalSystemPrompt },
+        { role: "user", content: prompt }
+      ]
+    };
+    if (thinkingMode === "on") requestBody.reasoning_effort = "high";
+    else if (thinkingMode === "auto") requestBody.reasoning_effort = "medium";
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${profile.apiKey}` },
+      body: JSON.stringify(requestBody)
+    });
+    if (!response.ok) throw new Error(`AI 生成失败：${response.status} ${await truncatedErrorText(response)}`);
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    const parsed = JSON.parse(content || "{}");
+    return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, 8) : [] };
+  }
 }
 
 async function listAvailableModels(settings: AppSettings): Promise<{ id: string; name: string }[]> {
   const profile = getReviewApiProfile(normalizeSettings(settings));
   if (!profile.apiBaseUrl || !profile.apiKey) return [];
-  const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/models`;
   try {
-    const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${profile.apiKey}` } });
-    if (!response.ok) return [];
-    const data = await response.json();
-    const models = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
-    return models.map((m: Record<string, unknown>) => ({ id: String(m.id || m.model || ""), name: String(m.id || m.model || "") })).filter((m: { id: string }) => m.id);
+    validateApiUrl(profile.apiBaseUrl);
+  } catch {
+    return [];
+  }
+  const isAnthropic = profile.apiType === "anthropic";
+  try {
+    if (isAnthropic) {
+      const baseUrl = profile.apiBaseUrl.replace(/\/$/, "");
+      const endpoint = baseUrl.endsWith("/v1") ? `${baseUrl}/models?limit=100` : `${baseUrl}/v1/models?limit=100`;
+      const response = await fetch(endpoint, {
+        headers: { "x-api-key": profile.apiKey, "anthropic-version": ANTHROPIC_API_VERSION }
+      });
+      if (!response.ok) return [];
+      const data = await response.json();
+      const models = Array.isArray(data?.data) ? data.data : [];
+      return models.map((m: Record<string, unknown>) => ({ id: String(m.id || ""), name: String(m.display_name || m.id || "") })).filter((m: { id: string }) => m.id);
+    } else {
+      const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/models`;
+      const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${profile.apiKey}` } });
+      if (!response.ok) return [];
+      const data = await response.json();
+      const models = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      return models.map((m: Record<string, unknown>) => ({ id: String(m.id || m.model || ""), name: String(m.id || m.model || "") })).filter((m: { id: string }) => m.id);
+    }
   } catch {
     return [];
   }
@@ -1967,9 +2466,49 @@ async function listAvailableModels(settings: AppSettings): Promise<{ id: string;
 
 function configureAutoUpdater(settings: AppSettings) {
   autoUpdater.autoDownload = false;
-  if (settings.updateFeedUrl.trim()) {
-    autoUpdater.setFeedURL({ provider: "generic", url: settings.updateFeedUrl.trim() });
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  const url = settings.updateFeedUrl.trim();
+  if (url) {
+    // 强制 HTTPS
+    if (!url.startsWith("https://")) {
+      appendLog("warn", "更新源 URL 不是 HTTPS，已拒绝", { url });
+      updateStatus = { state: "error", detail: "更新源 URL 必须使用 HTTPS 协议" };
+      mainWindow?.webContents.send("update:status", updateStatus);
+      return;
+    }
+
+    // 校验 URL 格式
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      appendLog("warn", "更新源 URL 格式无效，已拒绝", { url });
+      return;
+    }
+
+    // 域名白名单校验（可根据实际情况配置）
+    const ALLOWED_UPDATE_DOMAINS = [
+      "example.com", // 替换为实际的更新服务器域名
+      "github.com",
+      "githubusercontent.com"
+    ];
+
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const isAllowed = ALLOWED_UPDATE_DOMAINS.some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+
+    if (!isAllowed) {
+      appendLog("error", "更新源域名不在白名单中，已拒绝", { hostname, url: url.slice(0, 50) });
+      updateStatus = { state: "error", detail: `更新源域名 ${hostname} 不在允许列表中` };
+      mainWindow?.webContents.send("update:status", updateStatus);
+      return;
+    }
+
+    autoUpdater.setFeedURL({ provider: "generic", url });
   }
+
   if (updaterListenersConfigured) return;
   updaterListenersConfigured = true;
   autoUpdater.on("checking-for-update", () => {
@@ -2009,6 +2548,26 @@ async function checkForUpdates(settings: AppSettings): Promise<UpdateStatus> {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
+
+  // 内容安全策略（CSP）纵深防御
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [
+          "default-src 'self'; " +
+          "script-src 'self'; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "img-src 'self' data: file:; " +
+          "font-src 'self' data:; " +
+          "connect-src 'self' https:; " +
+          "media-src 'none'; " +
+          "object-src 'none'"
+        ]
+      }
+    });
+  });
+
   ipcMain.handle("settings:load", loadSettings);
   ipcMain.handle("settings:save", (_event, settings: AppSettings) => saveSettings(settings));
   ipcMain.handle("workbench:load", loadWorkbenchState);
@@ -2054,12 +2613,38 @@ app.whenReady().then(async () => {
   ipcMain.handle("update:install", () => autoUpdater.quitAndInstall(false, true));
   ipcMain.handle("clipboard:read", (): ClipboardSnapshot => {
     const text = clipboard.readText().trim();
-    if (text) return { kind: "text", text, signature: `text:${text}` };
+    if (text) {
+      // 限制读取大小，防止内存溢出
+      const MAX_CLIPBOARD_READ_SIZE = 10 * 1024 * 1024; // 10MB
+      if (text.length > MAX_CLIPBOARD_READ_SIZE) {
+        appendLog("warn", "剪贴板内容过大，已截断", { size: text.length });
+        const truncated = text.slice(0, MAX_CLIPBOARD_READ_SIZE);
+        const sig = truncated.length > 40 ? `${truncated.slice(0, 40)}...` : truncated;
+        return { kind: "text", text: truncated, signature: `text:${sig}` };
+      }
+      const sig = text.length > 40 ? `${text.slice(0, 40)}...` : text;
+      return { kind: "text", text, signature: `text:${sig}` };
+    }
     const image = clipboard.readImage();
     if (!image.isEmpty()) return { kind: "image", imageDataUrl: image.toDataURL(), signature: `image:${imageSignature(image)}` };
     return { kind: "empty", signature: "empty" };
   });
-  ipcMain.handle("clipboard:writeText", (_event, text: string) => clipboard.writeText(text));
+  ipcMain.handle("clipboard:writeText", (_event, text: string) => {
+    if (typeof text !== "string") return;
+    const MAX_CLIPBOARD_WRITE_SIZE = 100_000; // 100KB
+    if (text.length > MAX_CLIPBOARD_WRITE_SIZE) {
+      appendLog("warn", "剪贴板写入被拒绝：文本过长", { length: text.length });
+      return;
+    }
+
+    // 检查是否包含敏感信息（API Key 模式）
+    if (/sk-[a-zA-Z0-9]{20,}/.test(text) || /Bearer\s+[a-zA-Z0-9\-_]{20,}/i.test(text)) {
+      appendLog("warn", "剪贴板写入包含疑似 API Key，已阻止", { preview: text.slice(0, 20) });
+      throw new Error("安全警告：检测到剪贴板内容包含疑似 API Key 或敏感令牌，已阻止写入。请勿复制敏感凭据。");
+    }
+
+    clipboard.writeText(text);
+  });
   ipcMain.handle("export:workbook", (_event, payload: ExportPayload) => exportWorkbook(payload));
 
   createWindow();

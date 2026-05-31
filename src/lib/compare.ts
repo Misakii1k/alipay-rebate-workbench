@@ -87,5 +87,5 @@ function isNoiseLine(line: string) {
   if (compact.length < 2) return true;
   if (/^[\d\s.%¥$]+$/.test(compact)) return true;
   const noiseRatio = (compact.match(/[已发评价返款微信工作表状态修改客户姓名备注金额人员催促表单未需]/g) || []).length / compact.length;
-  return noiseRatio > 0.7 && compact.length <= 8;
+  return noiseRatio > 0.85 && compact.length <= 8;
 }

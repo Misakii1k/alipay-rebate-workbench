@@ -4,12 +4,14 @@ export type VideoTemplateId = "bos-template" | "video-slice";
 export type VideoTaskStatus = "draft" | "ready" | "processing" | "done" | "failed";
 export type FontScale = "small" | "normal" | "large";
 export type ReviewWorkspaceMode = "search" | "ai" | "mixed";
-export type ReviewThinkingMode = "off" | "fast" | "balanced" | "deep";
-export type ReviewThinkingEffort = "minimal" | "low" | "medium" | "high";
+export type ReviewThinkingMode = "off" | "auto" | "on";
+
+export type ApiType = "openai" | "anthropic";
 
 export interface ApiProfile {
   id: string;
   name: string;
+  apiType: ApiType;
   apiBaseUrl: string;
   apiKey: string;
   textModel: string;
@@ -45,7 +47,6 @@ export interface AppSettings {
   videoTemplate: VideoTemplateId;
   updateFeedUrl: string;
   reviewRootDir: string;
-  reviewEmojiLevel: number;
   reviewProfessionalLevel: number;
   reviewBuyerLevel: number;
   reviewExaggerationLevel: number;
@@ -61,10 +62,8 @@ export interface AppSettings {
   reviewFavoriteQueries?: string[];
   reviewGenerateHotkey: string;
   reviewWorkspaceMode: ReviewWorkspaceMode;
-  reviewScoringEnabled: boolean;
   reviewTargetLength: number;
   reviewThinkingMode: ReviewThinkingMode;
-  reviewThinkingEffort: ReviewThinkingEffort;
   titleAiSelectionEnabled: boolean;
   titleExtraKeywords: string;
   compareAutoOpenReminderDialog: boolean;
@@ -164,8 +163,6 @@ export interface ReviewGenerationOptions {
   productDescription: string;
   targetLength: number;
   thinkingMode: ReviewThinkingMode;
-  thinkingEffort: ReviewThinkingEffort;
-  emojiLevel: number;
   professionalLevel: number;
   buyerLevel: number;
   exaggerationLevel: number;
@@ -410,6 +407,7 @@ export interface WorkbenchState {
 export const DEFAULT_API_PROFILE: ApiProfile = {
   id: "default",
   name: "默认配置",
+  apiType: "openai",
   apiBaseUrl: "https://api.openai.com/v1",
   apiKey: "",
   textModel: "gpt-4.1-mini",
@@ -431,9 +429,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoAdvance: true,
   confirmLowConfidence: true,
   strictExportValidation: true,
-  exportNameOwner: "丛宇航",
-  fixedTailAccount: "19216140087",
-  fixedTailName: "丛宇航",
+  exportNameOwner: "",
+  fixedTailAccount: "",
+  fixedTailName: "",
   modelConcurrency: 2,
   modelRetryCount: 2,
   enableLearningFeedback: true,
@@ -447,7 +445,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   videoTemplate: "bos-template",
   updateFeedUrl: "",
   reviewRootDir: "",
-  reviewEmojiLevel: 2,
   reviewProfessionalLevel: 2,
   reviewBuyerLevel: 4,
   reviewExaggerationLevel: 2,
@@ -463,10 +460,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewFavoriteQueries: [],
   reviewGenerateHotkey: "Ctrl+Enter",
   reviewWorkspaceMode: "mixed",
-  reviewScoringEnabled: true,
   reviewTargetLength: 80,
-  reviewThinkingMode: "balanced",
-  reviewThinkingEffort: "medium",
+  reviewThinkingMode: "auto",
   titleAiSelectionEnabled: true,
   titleExtraKeywords: "",
   compareAutoOpenReminderDialog: true,
@@ -490,8 +485,8 @@ export const DEFAULT_VIDEO_WORKBENCH_STATE: VideoWorkbenchState = {
 };
 
 export const DEFAULT_FIXED_TAIL_ROW = {
-  account: "19216140087",
-  name: "丛宇航",
+  account: "",
+  name: "",
   amount: "",
   remark: ""
 };
@@ -512,17 +507,19 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
   const raw = value ?? {};
   const legacyProfile: ApiProfile = {
     ...DEFAULT_API_PROFILE,
+    apiType: (raw as unknown as Record<string, unknown>).apiType === "anthropic" ? "anthropic" : "openai",
     apiBaseUrl: String(raw.apiBaseUrl ?? DEFAULT_API_PROFILE.apiBaseUrl),
     apiKey: String(raw.apiKey ?? DEFAULT_API_PROFILE.apiKey),
     textModel: String(raw.textModel ?? DEFAULT_API_PROFILE.textModel),
     visionModel: String(raw.visionModel ?? DEFAULT_API_PROFILE.visionModel)
   };
   const loadedProfiles = Array.isArray(raw.apiProfiles) ? raw.apiProfiles : [];
-  const profiles = loadedProfiles.length
+  const profiles: ApiProfile[] = loadedProfiles.length
     ? loadedProfiles.map((profile, index) => ({
         ...DEFAULT_API_PROFILE,
         id: String(profile.id || `profile-${index + 1}`),
         name: String(profile.name || `配置 ${index + 1}`),
+        apiType: ((profile as unknown as Record<string, unknown>).apiType === "anthropic" ? "anthropic" : "openai") as ApiType,
         apiBaseUrl: String(profile.apiBaseUrl ?? legacyProfile.apiBaseUrl),
         apiKey: String(profile.apiKey ?? ""),
         textModel: String(profile.textModel ?? legacyProfile.textModel),
@@ -558,7 +555,6 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     videoTemplate: normalizeVideoTemplate(raw.videoTemplate),
     updateFeedUrl: String(raw.updateFeedUrl ?? ""),
     reviewRootDir: String(raw.reviewRootDir ?? ""),
-    reviewEmojiLevel: clampNumber(raw.reviewEmojiLevel, 0, 5, DEFAULT_SETTINGS.reviewEmojiLevel),
     reviewProfessionalLevel: clampNumber(raw.reviewProfessionalLevel, 0, 5, DEFAULT_SETTINGS.reviewProfessionalLevel),
     reviewBuyerLevel: clampNumber(raw.reviewBuyerLevel, 0, 5, DEFAULT_SETTINGS.reviewBuyerLevel),
     reviewExaggerationLevel: clampNumber(raw.reviewExaggerationLevel, 0, 5, DEFAULT_SETTINGS.reviewExaggerationLevel),
@@ -574,10 +570,8 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     reviewFavoriteQueries: Array.isArray(raw.reviewFavoriteQueries) ? raw.reviewFavoriteQueries.filter((x: unknown) => typeof x === "string").slice(0, 100) : [],
     reviewGenerateHotkey: String(raw.reviewGenerateHotkey ?? DEFAULT_SETTINGS.reviewGenerateHotkey),
     reviewWorkspaceMode: normalizeReviewWorkspaceMode(raw.reviewWorkspaceMode),
-    reviewScoringEnabled: Boolean(raw.reviewScoringEnabled ?? DEFAULT_SETTINGS.reviewScoringEnabled),
     reviewTargetLength: clampNumber(raw.reviewTargetLength, 30, 100, DEFAULT_SETTINGS.reviewTargetLength),
     reviewThinkingMode: normalizeReviewThinkingMode(raw.reviewThinkingMode),
-    reviewThinkingEffort: normalizeReviewThinkingEffort(raw.reviewThinkingEffort),
     titleAiSelectionEnabled: Boolean(raw.titleAiSelectionEnabled ?? DEFAULT_SETTINGS.titleAiSelectionEnabled),
     titleExtraKeywords: String(raw.titleExtraKeywords ?? ""),
     compareAutoOpenReminderDialog: Boolean(raw.compareAutoOpenReminderDialog ?? DEFAULT_SETTINGS.compareAutoOpenReminderDialog),
@@ -621,15 +615,24 @@ function normalizeReviewWorkspaceMode(value: unknown): ReviewWorkspaceMode {
 }
 
 function normalizeReviewThinkingMode(value: unknown): ReviewThinkingMode {
-  return value === "off" || value === "fast" || value === "deep" ? value : "balanced";
-}
-
-function normalizeReviewThinkingEffort(value: unknown): ReviewThinkingEffort {
-  return value === "minimal" || value === "low" || value === "high" ? value : "medium";
+  return value === "on" || value === "auto" ? value : "off";
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, Math.round(number)));
+}
+
+export const ANTHROPIC_API_VERSION = "2023-06-01";
+
+export function detectModelCapabilities(modelId: string, apiType?: string): { supportsThinking: boolean; supportsReasoningEffort: boolean; isVision: boolean } {
+  const id = modelId.toLowerCase();
+  if (apiType === "anthropic") {
+    const isVision = id.includes("claude-4") || id.includes("claude-3.7") || id.includes("claude-sonnet-4") || id.includes("claude-opus-4");
+    return { supportsThinking: true, supportsReasoningEffort: false, isVision };
+  }
+  const isReasoning = /^(o1|o3|o4|gpt-5)/.test(id);
+  const isVisionModel = /vision|llava|gemini.*vision|gpt-4o|gpt-5|claude/i.test(id);
+  return { supportsThinking: false, supportsReasoningEffort: isReasoning, isVision: isVisionModel };
 }

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp, Check, ChevronDown, Copy, Edit3, FolderOpen, Hammer, Image as ImageIcon,
   Keyboard, Loader2, RefreshCw, RotateCcw, Search, Sparkles, Star, StarOff, Trash2, WandSparkles, X
 } from "lucide-react";
 import clsx from "clsx";
-import type { AppSettings, ReviewGenerationOptions, ReviewSearchResult, ReviewThinkingEffort, ReviewThinkingMode, ReviewWorkspaceMode } from "./lib/shared";
+import type { AppSettings, ReviewGenerationOptions, ReviewSearchResult, ReviewThinkingMode, ReviewWorkspaceMode } from "./lib/shared";
 import { getReviewApiProfile } from "./lib/shared";
 
 const REVIEW_INITIAL_VISIBLE = 36;
@@ -12,7 +12,7 @@ const REVIEW_LOAD_STEP = 24;
 const REVIEW_THUMBNAIL_BATCH = 18;
 const RECENT_QUERIES_KEY = "review-recent-queries";
 const MAX_RECENT_QUERIES = 8;
-type ReviewSortMode = "relevance" | "name-asc" | "name-desc" | "time-desc" | "time-asc";
+type ReviewSortMode = "name-asc" | "name-desc" | "time-desc" | "time-asc";
 type ReviewFilterMode = "all" | "image" | "folder" | "selected";
 
 interface ReviewSessionState {
@@ -59,7 +59,6 @@ export function ReviewAssistant({
   const [copies, setCopies] = useState<string[]>(() => reviewSessionState?.copies ?? []);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
-  const [apiConfirmed, setVipConfirmed] = useState(false);
   const [batchSeed, setBatchSeed] = useState(() => reviewSessionState?.batchSeed ?? 1);
   const [customPrompt, setCustomPrompt] = useState(settings.reviewCustomPrompt ?? "");
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -72,11 +71,12 @@ export function ReviewAssistant({
     const profile = getReviewApiProfile(settings);
     return profile.textModel;
   });
-  const [sortMode, setSortMode] = useState<ReviewSortMode>(() => settings.reviewScoringEnabled ? "relevance" : "time-desc");
+  const [sortMode, setSortMode] = useState<ReviewSortMode>("time-desc");
   const [filterMode, setFilterMode] = useState<ReviewFilterMode>("all");
   const [isPointerSelecting, setIsPointerSelecting] = useState(false);
   const pointerSelectModeRef = useRef<"select" | "deselect">("select");
   const [showBackTop, setShowBackTop] = useState(false);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [recentQueries, setRecentQueries] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem(RECENT_QUERIES_KEY);
@@ -85,7 +85,6 @@ export function ReviewAssistant({
   });
   const favoriteQueries = useMemo(() => settings.reviewFavoriteQueries ?? [], [settings.reviewFavoriteQueries]);
   const [options, setOptions] = useState({
-    emojiLevel: settings.reviewEmojiLevel,
     professionalLevel: settings.reviewProfessionalLevel,
     buyerLevel: settings.reviewBuyerLevel,
     exaggerationLevel: settings.reviewExaggerationLevel,
@@ -93,8 +92,7 @@ export function ReviewAssistant({
     mentionValue: settings.reviewMentionValue,
     productDescription: settings.reviewProductDescription,
     targetLength: settings.reviewTargetLength,
-    thinkingMode: settings.reviewThinkingMode,
-    thinkingEffort: settings.reviewThinkingEffort
+    thinkingMode: settings.reviewThinkingMode
   });
   const loadMoreTimerRef = useRef<number>(0);
   const copyListRef = useRef<HTMLDivElement>(null);
@@ -105,7 +103,6 @@ export function ReviewAssistant({
   const sortedResults = useMemo(() => {
     const collator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
     const next = [...results];
-    if (sortMode === "relevance") next.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     if (sortMode === "name-asc") next.sort((a, b) => collator.compare(a.name, b.name));
     if (sortMode === "name-desc") next.sort((a, b) => collator.compare(b.name, a.name));
     if (sortMode === "time-desc") next.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
@@ -261,16 +258,10 @@ export function ReviewAssistant({
     await onSaveSettings({ ...settings, reviewWorkspaceMode: nextMode });
   }
 
-  async function toggleScoring(enabled: boolean) {
-    await onSaveSettings({ ...settings, reviewScoringEnabled: enabled });
-    showToast(enabled ? "已开启相关性评分。" : "已关闭相关性评分，搜索会更轻量。");
-  }
-
   function clearContext() {
     setSelected([]);
     setCopies([]);
     setBatchSeed(1);
-    setVipConfirmed(false);
     setPreview(results[0] ?? null);
     showToast("上下文已清空，可以开始新一轮生成。");
   }
@@ -301,7 +292,7 @@ export function ReviewAssistant({
       setResults(found);
       setSelected([]);
       setVisibleCount(REVIEW_INITIAL_VISIBLE);
-      setSortMode(settings.reviewScoringEnabled ? "relevance" : "time-desc");
+      setSortMode("time-desc");
       setFilterMode("all");
       setLoadingMore(false);
       setPreview(found[0] ?? null);
@@ -374,6 +365,15 @@ export function ReviewAssistant({
     setSelected([...new Set(all)]);
   }
 
+  function toggleExpand(folderPath: string) {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) next.delete(folderPath);
+      else next.add(folderPath);
+      return next;
+    });
+  }
+
   function dragPathsFor(item: ReviewSearchResult) {
     const paths = visiblePathGroups.get(item.path) ?? selectablePaths(item);
     return paths.some((path) => selectedSet.has(path)) && selected.length ? selected : paths;
@@ -401,9 +401,8 @@ export function ReviewAssistant({
       showToast("请先选择至少一张参考图片。");
       return;
     }
-    if (!apiConfirmed && !modelConnected) {
-      setVipConfirmed(true);
-      showToast("AI 生成功能将调用大模型 API，请确认 API 配置可用。");
+    if (!modelConnected) {
+      showToast("大模型尚未连接，请先在设置中测试连接。");
       return;
     }
     const seed = nextBatch ? batchSeed + 1 : batchSeed;
@@ -417,8 +416,6 @@ export function ReviewAssistant({
         productDescription: options.productDescription,
         targetLength: options.targetLength,
         thinkingMode: options.thinkingMode,
-        thinkingEffort: options.thinkingEffort,
-        emojiLevel: options.emojiLevel,
         professionalLevel: options.professionalLevel,
         buyerLevel: options.buyerLevel,
         exaggerationLevel: options.exaggerationLevel,
@@ -431,7 +428,6 @@ export function ReviewAssistant({
       requestAnimationFrame(() => copyListRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
       await onSaveSettings({
         ...settings,
-        reviewEmojiLevel: options.emojiLevel,
         reviewProfessionalLevel: options.professionalLevel,
         reviewBuyerLevel: options.buyerLevel,
         reviewExaggerationLevel: options.exaggerationLevel,
@@ -439,8 +435,7 @@ export function ReviewAssistant({
         reviewMentionValue: options.mentionValue,
         reviewProductDescription: options.productDescription,
         reviewTargetLength: options.targetLength,
-        reviewThinkingMode: options.thinkingMode,
-        reviewThinkingEffort: options.thinkingEffort
+        reviewThinkingMode: options.thinkingMode
       });
     } catch (error) {
       showToast(error instanceof Error ? error.message : "AI 生成失败");
@@ -515,8 +510,6 @@ export function ReviewAssistant({
           <ReviewModeTabs
             mode={mode}
             onModeChange={(nextMode) => void setMode(nextMode)}
-            scoringEnabled={settings.reviewScoringEnabled}
-            onToggleScoring={(enabled) => void toggleScoring(enabled)}
           />
           <ReviewHero
             mode={mode}
@@ -553,15 +546,15 @@ export function ReviewAssistant({
               onSortChange={setSortMode}
               filterMode={filterMode}
               onFilterChange={setFilterMode}
-              scoringEnabled={settings.reviewScoringEnabled}
             />
 
             {results.length === 0 && !searching && <ReviewEmptyState query={query} />}
 
             <ReviewResultGrid
               items={visibleResults}
-              scoringEnabled={settings.reviewScoringEnabled}
               selectedKeys={visibleSelectedKeys}
+              expandedFolders={expandedFolders}
+              onToggleExpand={toggleExpand}
               onToggle={(item) => { toggle(item); setPreview(item); }}
               onPointerSelect={beginPointerSelection}
               onPointerEnterSelect={(item) => { if (isPointerSelecting) applyPointerSelection(item); }}
@@ -578,7 +571,7 @@ export function ReviewAssistant({
             )}
           </div>
 
-          <ReviewPreviewPanel preview={preview} selectedImages={selected.length} selectedCards={selectedCardCount} scoringEnabled={settings.reviewScoringEnabled} />
+          <ReviewPreviewPanel preview={preview} selectedImages={selected.length} selectedCards={selectedCardCount} />
         </div>
       )}
 
@@ -646,7 +639,7 @@ export function ReviewAssistant({
   );
 }
 
-function ReviewModeTabs({ mode, onModeChange, scoringEnabled, onToggleScoring }: { mode: ReviewWorkspaceMode; onModeChange: (mode: ReviewWorkspaceMode) => void; scoringEnabled: boolean; onToggleScoring: (enabled: boolean) => void }) {
+function ReviewModeTabs({ mode, onModeChange }: { mode: ReviewWorkspaceMode; onModeChange: (mode: ReviewWorkspaceMode) => void }) {
   const modeOptions: Array<{ key: ReviewWorkspaceMode; label: string; icon: typeof Search }> = [
     { key: "search", label: "搜索模式", icon: Search },
     { key: "ai", label: "AI评价", icon: WandSparkles },
@@ -665,17 +658,6 @@ function ReviewModeTabs({ mode, onModeChange, scoringEnabled, onToggleScoring }:
           );
         })}
       </div>
-      {mode !== "ai" && (
-        <div className="review-v2-score-toggle">
-          <button type="button" className={clsx("review-v2-score-switch", scoringEnabled && "on")} role="switch" aria-checked={scoringEnabled} onClick={() => onToggleScoring(!scoringEnabled)} title={scoringEnabled ? "相关性评分已开启" : "相关性评分已关闭"}>
-            <i className="review-v2-score-switch-thumb" />
-          </button>
-          <div className="review-v2-score-labels">
-            <span>相关性评分</span>
-            <em>{scoringEnabled ? "优先高相关" : "关闭省性能"}</em>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -824,7 +806,7 @@ function ReviewScanProgressBar({ progress, searching }: { progress: ScanProgress
   );
 }
 
-function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCount, onSelectAll, onClear, searching, sortMode, onSortChange, filterMode, onFilterChange, scoringEnabled }: { selectedImages: number; selectedCards: number; totalResults: number; visibleCount: number; onSelectAll: () => void; onClear: () => void; searching: boolean; sortMode: ReviewSortMode; onSortChange: (mode: ReviewSortMode) => void; filterMode: ReviewFilterMode; onFilterChange: (mode: ReviewFilterMode) => void; scoringEnabled: boolean; }) {
+function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCount, onSelectAll, onClear, searching, sortMode, onSortChange, filterMode, onFilterChange }: { selectedImages: number; selectedCards: number; totalResults: number; visibleCount: number; onSelectAll: () => void; onClear: () => void; searching: boolean; sortMode: ReviewSortMode; onSortChange: (mode: ReviewSortMode) => void; filterMode: ReviewFilterMode; onFilterChange: (mode: ReviewFilterMode) => void; }) {
   return (
     <div className="review-v2-toolbar">
       <span className="review-v2-toolbar-status">{searching ? "正在检索" : totalResults > 0 ? "按匹配度展示 " + visibleCount + " / " + totalResults : "无结果"}</span>
@@ -836,7 +818,6 @@ function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCou
           <option value="selected">已选</option>
         </select>
         <select className="review-v2-toolbar-select" value={sortMode} onChange={(event) => onSortChange(event.target.value as ReviewSortMode)}>
-          {scoringEnabled && <option value="relevance">相关度</option>}
           <option value="time-desc">时间新到旧</option>
           <option value="time-asc">时间旧到新</option>
           <option value="name-asc">文件名 A-Z</option>
@@ -854,57 +835,75 @@ function ReviewEmptyState({ query }: { query: string }) {
   return <div className="review-v2-empty"><ImageIcon size={48} /><strong>{query ? "没有找到“" + query + "”相关图片" : "未搜索"}</strong><span>试试换个关键词，或检查图片根目录是否正确。</span></div>;
 }
 
-function ReviewResultGrid({ items, scoringEnabled = true, selectedKeys, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onPreview, dragPathsFor }: { items: ReviewSearchResult[]; scoringEnabled?: boolean; selectedKeys: Set<string>; onToggle: (item: ReviewSearchResult) => void; onPointerSelect: (item: ReviewSearchResult) => void; onPointerEnterSelect: (item: ReviewSearchResult) => void; onSelectFolderChildren: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; }) {
+function ReviewResultGrid({ items, selectedKeys, expandedFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onPreview, dragPathsFor }: { items: ReviewSearchResult[]; selectedKeys: Set<string>; expandedFolders: Set<string>; onToggleExpand: (path: string) => void; onToggle: (item: ReviewSearchResult) => void; onPointerSelect: (item: ReviewSearchResult) => void; onPointerEnterSelect: (item: ReviewSearchResult) => void; onSelectFolderChildren: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; }) {
   return (
     <div className="review-v2-grid">
       {items.map((item) => {
         const isFolder = item.kind === "folder";
         const isSelected = selectedKeys.has(item.path);
+        const isExpanded = isFolder && expandedFolders.has(item.path);
         return (
-          <button key={item.path} className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
-            <div className="review-v2-thumb">
-              {item.thumbnailDataUrl ? <img src={item.thumbnailDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
-              {isFolder && item.children && item.children.length > 1 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {item.children.length}</span>}
-              {scoringEnabled && <span className="review-v2-score">{item.score}</span>}
-              {isSelected && <span className="review-v2-check"><Check size={14} /></span>}
-            </div>
-            <strong className="review-v2-name">{item.name}</strong><em className="review-v2-reason">{item.reason}</em>
-            {isFolder && item.children?.length ? <span className="review-v2-folder-select" onClick={(event) => { event.stopPropagation(); onSelectFolderChildren(item); }}>选中整个文件夹</span> : null}
-          </button>
+          <Fragment key={item.path}>
+            <button className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
+              <div className="review-v2-thumb">
+                {item.thumbnailDataUrl ? <img src={item.thumbnailDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
+                {isFolder && item.children && item.children.length > 1 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {item.children.length}</span>}
+                {isFolder && item.children && item.children.length > 0 && (
+                  <button className={clsx("review-v2-expand-btn", isExpanded && "expanded")} onClick={(e) => { e.stopPropagation(); onToggleExpand(item.path); }} title={isExpanded ? "折叠" : "展开"}>
+                    <ChevronDown size={14} />
+                  </button>
+                )}
+                {isSelected && <span className="review-v2-check"><Check size={14} /></span>}
+              </div>
+              <strong className="review-v2-name">{item.name}</strong><em className="review-v2-reason">{item.reason}</em>
+              {isFolder && item.children?.length ? <span className="review-v2-folder-select" onClick={(event) => { event.stopPropagation(); onSelectFolderChildren(item); }}>选中整个文件夹</span> : null}
+            </button>
+            {isExpanded && item.children?.map((child) => {
+              const childSelected = selectedKeys.has(child.path);
+              return (
+                <button key={child.path} className={clsx("review-v2-card review-v2-child-card", childSelected && "selected")} draggable onClick={() => onToggle(child)} onPointerDown={() => onPreview(child)} onPointerEnter={() => onPointerEnterSelect(child)} onMouseEnter={() => onPreview(child)} onDragStart={(event) => { const paths = dragPathsFor(child); onPreview(child); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
+                  <div className="review-v2-thumb">
+                    {child.thumbnailDataUrl ? <img src={child.thumbnailDataUrl} alt={child.name} /> : <ImageIcon size={24} />}
+                    {childSelected && <span className="review-v2-check"><Check size={14} /></span>}
+                  </div>
+                  <strong className="review-v2-name">{child.name}</strong><em className="review-v2-reason">{child.reason}</em>
+                </button>
+              );
+            })}
+          </Fragment>
         );
       })}
     </div>
   );
 }
 
-function ReviewPreviewPanel({ preview, selectedImages, selectedCards, scoringEnabled = true }: { preview: ReviewSearchResult | null; selectedImages: number; selectedCards: number; scoringEnabled?: boolean }) {
+function ReviewPreviewPanel({ preview, selectedImages, selectedCards }: { preview: ReviewSearchResult | null; selectedImages: number; selectedCards: number }) {
   return (
     <aside className="review-v2-preview">
       <div className="review-v2-preview-image">{preview?.thumbnailDataUrl ? <img src={preview.thumbnailDataUrl} alt={preview.name} /> : <div className="review-v2-preview-empty"><ImageIcon size={32} /><span>选择图片后预览</span></div>}</div>
       <div className="review-v2-preview-info">
         <strong>{preview?.name || "未选择"}</strong><span>{preview?.path || ""}</span>
         {preview?.kind === "folder" && preview.children && <em>文件夹包含 {preview.children.length} 张图</em>}
-        <div className="review-v2-preview-stats"><span><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span>{scoringEnabled && preview?.score !== undefined && <span><Star size={12} /> 评分 {preview.score}</span>}</div>
+        <div className="review-v2-preview-stats"><span><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span></div>
       </div>
     </aside>
   );
 }
 
-function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onGenerate, onNextBatch, generating, hasCopies, canGenerate, onClearContext, hotkey, onSaveHotkey }: { query: string; setQuery: (value: string) => void; options: { emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }; setOptions: React.Dispatch<React.SetStateAction<{ emojiLevel: number; professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; thinkingEffort: ReviewThinkingEffort; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onGenerate: () => void; onNextBatch: () => void; generating: boolean; hasCopies: boolean; canGenerate: boolean; onClearContext: () => void; hotkey: string; onSaveHotkey: (value: string) => void; }) {
+function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onGenerate, onNextBatch, generating, hasCopies, canGenerate, onClearContext, hotkey, onSaveHotkey }: { query: string; setQuery: (value: string) => void; options: { professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }; setOptions: React.Dispatch<React.SetStateAction<{ professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onGenerate: () => void; onNextBatch: () => void; generating: boolean; hasCopies: boolean; canGenerate: boolean; onClearContext: () => void; hotkey: string; onSaveHotkey: (value: string) => void; }) {
   return (
     <section className="review-v2-ai-panel">
       <div className="review-v2-ai-head"><WandSparkles size={18} /><strong>AI 生成好评</strong><span className="review-v2-ai-tag">高级功能</span><div className="review-v2-ai-model"><select value={selectedModelId} onChange={(e) => onModelChange(e.target.value)}>{availableModels.length === 0 && <option value={selectedModelId}>{selectedModelId || "未选择模型"}</option>}{availableModels.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select><button className="review-v2-ai-refresh" onClick={onLoadModels} disabled={loadingModels} title="刷新可用模型">{loadingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}</button></div></div>
       <div className="review-v2-sliders">
         <label className="review-v2-desc review-v2-query-field"><span>商品/搜索词</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="例如：彩棉317 夏季长裤" /></label>
         <label className="review-v2-desc review-v2-length-field"><span>目标字数：{options.targetLength}</span><input type="range" min={30} max={100} step={5} value={options.targetLength} onChange={(e) => setOptions((p) => ({ ...p, targetLength: Number(e.target.value) }))} /></label>
-        <SliderCompact label="Emoji" value={options.emojiLevel} onChange={(v) => setOptions((p) => ({ ...p, emojiLevel: v }))} />
         <SliderCompact label="专业" value={options.professionalLevel} onChange={(v) => setOptions((p) => ({ ...p, professionalLevel: v }))} />
         <SliderCompact label="买家味" value={options.buyerLevel} onChange={(v) => setOptions((p) => ({ ...p, buyerLevel: v }))} />
         <SliderCompact label="夸张度" value={options.exaggerationLevel} onChange={(v) => setOptions((p) => ({ ...p, exaggerationLevel: v }))} />
         <SliderCompact label="场景化" value={options.sceneLevel} onChange={(v) => setOptions((p) => ({ ...p, sceneLevel: v }))} />
         <label className="review-v2-toggle"><span>性价比</span><input type="checkbox" checked={options.mentionValue} onChange={(e) => setOptions((p) => ({ ...p, mentionValue: e.target.checked }))} /><span className="review-v2-toggle-track"><span className="review-v2-toggle-thumb" /></span></label>
       </div>
-      <div className="review-v2-thinking-row"><label><span>思考模式</span><select value={options.thinkingMode} onChange={(e) => setOptions((p) => ({ ...p, thinkingMode: e.target.value as ReviewThinkingMode }))}><option value="off">关闭</option><option value="fast">快速</option><option value="balanced">均衡</option><option value="deep">深度</option></select></label><label><span>思考程度</span><select value={options.thinkingEffort} onChange={(e) => setOptions((p) => ({ ...p, thinkingEffort: e.target.value as ReviewThinkingEffort }))}><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label></div>
+      <div className="review-v2-thinking-row"><label><span>思考模式</span><select value={options.thinkingMode} onChange={(e) => setOptions((p) => ({ ...p, thinkingMode: e.target.value as ReviewThinkingMode }))}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label></div>
       <label className="review-v2-desc review-v2-hotkey"><span><Keyboard size={13} /> 生成快捷键</span><input value={hotkey} onChange={(e) => onSaveHotkey(e.target.value)} placeholder="Ctrl+Enter" /></label>
       <label className="review-v2-desc"><span>商品描述补充</span><textarea value={options.productDescription} onChange={(e) => setOptions((p) => ({ ...p, productDescription: e.target.value }))} placeholder="补充商品卖点，让好评更贴合（可选）" /></label>
       <button className="review-v2-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}><ChevronDown size={14} className={clsx("review-v2-chev", advancedOpen && "open")} />高级：自定义提示词</button>
