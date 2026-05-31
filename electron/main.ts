@@ -46,11 +46,12 @@ import { analyzeTitleScore, containsThirdPartyBrand, generateTitleScore, preview
 import { CLOUD_REVIEW_PROMPT, TEXT_RECOGNITION_PROMPT, recognizeByRules, recognizePartialByRules } from "../src/lib/recognition";
 
 // ============================================================================
-// 新的模块化架构导入
+// 导入新的模块化架构
 // ============================================================================
 import { registerAllHandlers } from "./handlers";
 import { setMainWindow as setExportMainWindow } from "./handlers/export";
 import { setMainWindow as setUpdateMainWindow, initializeAutoUpdater } from "./handlers/update";
+import { setMainWindow as setFilesMainWindow } from "./handlers/files";
 // 注意：utils 模块中的函数已在下方重新定义，暂时保留原有实现以避免破坏现有代码
 // TODO: 逐步替换为 import { validatePathSafety, ... } from "./utils/security" 等
 
@@ -2587,9 +2588,6 @@ app.whenReady().then(async () => {
   // 待迁移的 handlers（仍在 main.ts 中）
   // TODO: 逐步迁移到独立的 handler 模块
   // ============================================================================
-  ipcMain.handle("log:append", (_event, level: "info" | "warn" | "error", message: string, meta?: unknown) => appendLog(level, message, meta));
-  ipcMain.handle("files:select", (_event, options: SelectFilesOptions) => selectFiles(options));
-  ipcMain.handle("directory:select", (_event, title: string) => selectDirectory(title));
   ipcMain.handle("title:selectExcel", () => selectTitleKeywordExcel());
   ipcMain.handle("title:loadKeywordData", (_event, settings: AppSettings) => loadTitleKeywordData(settings));
   ipcMain.handle("title:analyze", (_event, settings: AppSettings, payload: TitleAnalyzePayload) => analyzeTitle(settings, payload));
@@ -2612,6 +2610,7 @@ app.whenReady().then(async () => {
   createWindow();
   setExportMainWindow(mainWindow);
   setUpdateMainWindow(mainWindow);
+  setFilesMainWindow(mainWindow);
   const settings = await loadSettings();
   await initializeAutoUpdater(settings);
 
