@@ -45,6 +45,15 @@ import {
 import { analyzeTitleScore, containsThirdPartyBrand, generateTitleScore, previewTokenPool, sanitizeTitleKeyword } from "../src/lib/titleOptimizer";
 import { CLOUD_REVIEW_PROMPT, TEXT_RECOGNITION_PROMPT, recognizeByRules, recognizePartialByRules } from "../src/lib/recognition";
 
+// ============================================================================
+// 新的模块化架构导入
+// ============================================================================
+import { registerAllHandlers } from "./handlers";
+import { setMainWindow as setExportMainWindow } from "./handlers/export";
+import { setMainWindow as setUpdateMainWindow, initializeAutoUpdater } from "./handlers/update";
+// 注意：utils 模块中的函数已在下方重新定义，暂时保留原有实现以避免破坏现有代码
+// TODO: 逐步替换为 import { validatePathSafety, ... } from "./utils/security" 等
+
 let mainWindow: BrowserWindow | null = null;
 let cpuThreads = Math.max(1, os.cpus().length);
 let updateStatus: UpdateStatus = { state: "idle", detail: "尚未检查更新" };
@@ -2568,23 +2577,19 @@ app.whenReady().then(async () => {
     });
   });
 
-  ipcMain.handle("settings:load", loadSettings);
-  ipcMain.handle("settings:save", (_event, settings: AppSettings) => saveSettings(settings));
-  ipcMain.handle("workbench:load", loadWorkbenchState);
-  ipcMain.handle("workbench:save", (_event, state: WorkbenchState) => saveWorkbenchState(state));
-  ipcMain.handle("videoWorkbench:load", loadVideoWorkbenchState);
-  ipcMain.handle("videoWorkbench:save", (_event, state: VideoWorkbenchState) => saveVideoWorkbenchState(state));
+  // ============================================================================
+  // 注册所有已模块化的 IPC handlers
+  // 包括：settings, workbench, window, clipboard, export, media, ai, everything, update
+  // ============================================================================
+  registerAllHandlers(ipcMain);
+
+  // ============================================================================
+  // 待迁移的 handlers（仍在 main.ts 中）
+  // TODO: 逐步迁移到独立的 handler 模块
+  // ============================================================================
   ipcMain.handle("log:append", (_event, level: "info" | "warn" | "error", message: string, meta?: unknown) => appendLog(level, message, meta));
   ipcMain.handle("files:select", (_event, options: SelectFilesOptions) => selectFiles(options));
   ipcMain.handle("directory:select", (_event, title: string) => selectDirectory(title));
-  ipcMain.handle("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
-  ipcMain.handle("window:toggleMaximize", (event) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return;
-    if (window.isMaximized()) window.unmaximize();
-    else window.maximize();
-  });
-  ipcMain.handle("window:close", (event) => BrowserWindow.fromWebContents(event.sender)?.close());
   ipcMain.handle("title:selectExcel", () => selectTitleKeywordExcel());
   ipcMain.handle("title:loadKeywordData", (_event, settings: AppSettings) => loadTitleKeywordData(settings));
   ipcMain.handle("title:analyze", (_event, settings: AppSettings, payload: TitleAnalyzePayload) => analyzeTitle(settings, payload));
@@ -2594,8 +2599,6 @@ app.whenReady().then(async () => {
   ipcMain.handle("ffmpeg:autoFix", (_event, settings: AppSettings) => autoFixFfmpeg(normalizeSettings(settings)));
   ipcMain.handle("video:scanLibrary", (_event, settings: AppSettings, productName: string, colorName: string) => scanVideoLibrary(settings, productName, colorName));
   ipcMain.handle("video:renderTask", (_event, payload: VideoRenderPayload) => renderVideoTask(payload));
-  ipcMain.handle("media:latestImage", (_event, dir: string) => latestImageInDirectory(dir));
-  ipcMain.handle("media:imagePreview", (_event, filePath: string) => imageToDataUrl(filePath, 960) ?? "");
   ipcMain.handle("review:scanAssets", (event, root: string, query: string, settings?: AppSettings) => scanReviewAssets(root, query, settings ? normalizeSettings(settings) : undefined, event));
   ipcMain.handle("review:loadThumbnails", (_event, paths: string[]) => loadReviewThumbnails(paths));
   ipcMain.handle("review:loadThumbnailBatch", (_event, paths: string[], size?: number) => loadReviewThumbnailBatch(paths, size));
@@ -2605,52 +2608,12 @@ app.whenReady().then(async () => {
   ipcMain.handle("title:enhancePool", (_event, settings: AppSettings, payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }) => enhanceTitlePoolWithLLM(settings, payload));
   ipcMain.handle("recognition:recognizeText", (_event, text: string, settings: AppSettings) => recognizeTextInMain(text, settings));
   ipcMain.handle("recognition:cloudReview", (_event, rawText: string, localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">, settings: AppSettings) => reviewRecognitionCloudInMain(rawText, localResult, settings));
-  ipcMain.handle("ai:testConnection", (_event, settings: AppSettings) => testModelConnectionInMain(settings));
-  ipcMain.handle("ai:listModels", (_event, settings: AppSettings) => listAvailableModels(settings));
-  ipcMain.handle("everything:test", (_event, settings: AppSettings) => testEverythingConnection(normalizeSettings(settings)));
-  ipcMain.handle("update:check", (_event, settings: AppSettings) => checkForUpdates(settings));
-  ipcMain.handle("update:download", () => autoUpdater.downloadUpdate());
-  ipcMain.handle("update:install", () => autoUpdater.quitAndInstall(false, true));
-  ipcMain.handle("clipboard:read", (): ClipboardSnapshot => {
-    const text = clipboard.readText().trim();
-    if (text) {
-      // 限制读取大小，防止内存溢出
-      const MAX_CLIPBOARD_READ_SIZE = 10 * 1024 * 1024; // 10MB
-      if (text.length > MAX_CLIPBOARD_READ_SIZE) {
-        appendLog("warn", "剪贴板内容过大，已截断", { size: text.length });
-        const truncated = text.slice(0, MAX_CLIPBOARD_READ_SIZE);
-        const sig = truncated.length > 40 ? `${truncated.slice(0, 40)}...` : truncated;
-        return { kind: "text", text: truncated, signature: `text:${sig}` };
-      }
-      const sig = text.length > 40 ? `${text.slice(0, 40)}...` : text;
-      return { kind: "text", text, signature: `text:${sig}` };
-    }
-    const image = clipboard.readImage();
-    if (!image.isEmpty()) return { kind: "image", imageDataUrl: image.toDataURL(), signature: `image:${imageSignature(image)}` };
-    return { kind: "empty", signature: "empty" };
-  });
-  ipcMain.handle("clipboard:writeText", (_event, text: string) => {
-    if (typeof text !== "string") return;
-    const MAX_CLIPBOARD_WRITE_SIZE = 100_000; // 100KB
-    if (text.length > MAX_CLIPBOARD_WRITE_SIZE) {
-      appendLog("warn", "剪贴板写入被拒绝：文本过长", { length: text.length });
-      return;
-    }
-
-    // 检查是否包含敏感信息（API Key 模式）
-    if (/sk-[a-zA-Z0-9]{20,}/.test(text) || /Bearer\s+[a-zA-Z0-9\-_]{20,}/i.test(text)) {
-      appendLog("warn", "剪贴板写入包含疑似 API Key，已阻止", { preview: text.slice(0, 20) });
-      throw new Error("安全警告：检测到剪贴板内容包含疑似 API Key 或敏感令牌，已阻止写入。请勿复制敏感凭据。");
-    }
-
-    clipboard.writeText(text);
-  });
-  ipcMain.handle("export:workbook", (_event, payload: ExportPayload) => exportWorkbook(payload));
 
   createWindow();
+  setExportMainWindow(mainWindow);
+  setUpdateMainWindow(mainWindow);
   const settings = await loadSettings();
-  configureAutoUpdater(settings);
-  setTimeout(() => void checkForUpdates(settings).catch((error) => appendLog("warn", "后台检查更新失败", { message: error.message })), 2500);
+  await initializeAutoUpdater(settings);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
