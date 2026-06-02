@@ -42,7 +42,10 @@ export function VideoWorkbench({
   useEffect(() => {
     window.alipayWorkbench.loadVideoWorkbenchState().then((state) => {
       if (state.tasks?.length) {
-        const normalizedTasks = state.tasks.map(normalizeVideoTask);
+        const normalizedTasks = state.tasks.map((t) => {
+          const nt = normalizeVideoTask(t);
+          return nt.template === "video-slice" ? { ...nt, template: "bos-template" as const } : nt;
+        });
         setTasks(normalizedTasks);
         setCurrentIndex(Math.min(state.currentIndex ?? 0, normalizedTasks.length - 1));
       }
@@ -326,7 +329,7 @@ export function VideoWorkbench({
 
       <div className="template-switch" data-tour="video-template">
         <button className={clsx(currentTask.template !== "video-slice" && "active")} onClick={() => updateCurrent({ template: "bos-template" as VideoTemplateId })}>帛先生模板</button>
-        <button className={clsx(currentTask.template === "video-slice" && "active")} onClick={() => updateCurrent({ template: "video-slice", videoPath: "" })}>视频切片</button>
+        <button disabled title="功能维护中，暂不可用">视频切片（暂不可用）</button>
         <span>{ffmpegStatus.detail}</span>
       </div>
 
