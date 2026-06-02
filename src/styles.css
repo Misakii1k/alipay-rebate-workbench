@@ -3986,17 +3986,19 @@ th,
 .review-v2-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; }
 .review-v2-results-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
-.review-v2-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px; flex-wrap: wrap; gap: 8px; position: sticky; top: 8px; z-index: 12; background: rgba(10, 13, 20, 0.72); backdrop-filter: var(--glass-blur); border: 1px solid var(--line); border-radius: 12px; }
-.review-v2-toolbar-status { color: var(--muted); font-size: var(--font-xs); }
-.review-v2-toolbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.review-v2-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; gap: 8px; position: sticky; top: 8px; z-index: 12; background: rgba(10, 13, 20, 0.72); backdrop-filter: var(--glass-blur); border: 1px solid var(--line); border-radius: 12px; }
+.review-v2-toolbar-status { color: var(--muted); font-size: var(--font-xs); white-space: nowrap; flex-shrink: 0; }
+.review-v2-toolbar-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .review-v2-toolbar-select {
-  height: 30px;
+  height: 28px;
+  width: auto;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(8, 11, 20, 0.64);
   color: var(--ink);
   font-size: var(--font-xs);
-  padding: 0 8px;
+  padding: 0 6px;
 }
 .review-v2-selected-chip {
   display: inline-flex;
@@ -4187,23 +4189,22 @@ th,
 .review-v2-gen-status { display: inline-flex; align-items: center; gap: 6px; color: var(--blue); font-size: var(--font-xs); margin-left: 6px; }
 .review-v2-hotkey span { display: inline-flex; align-items: center; gap: 5px; }
 .review-v2-back-top {
-  position: sticky;
-  bottom: 16px;
-  z-index: 20;
-  align-self: flex-end;
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  z-index: 100;
   width: 42px;
   height: 42px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: rgba(15, 19, 32, 0.82);
+  background: rgba(15, 19, 32, 0.92);
   backdrop-filter: var(--glass-blur);
   color: var(--ink);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  flex-shrink: 0;
 }
 .review-v2-back-top:hover { border-color: var(--green); color: var(--green); }
 

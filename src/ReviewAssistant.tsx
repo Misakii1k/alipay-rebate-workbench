@@ -642,11 +642,6 @@ export function ReviewAssistant({
                 加载更多（剩余 {filteredResults.length - visibleCount} 个）
               </button>
             )}
-            {showBackTop && (
-              <button className="review-v2-back-top" onClick={() => { const container = document.querySelector(".main"); if (container) container.scrollTo({ top: 0, behavior: "smooth" }); else topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }} title="回到顶部" aria-label="回到顶部">
-                <ArrowUp size={16} />
-              </button>
-            )}
           </div>
 
           <ReviewPreviewPanel preview={preview} selectedImages={selected.length} selectedCards={selectedCardCount} />
@@ -712,6 +707,11 @@ export function ReviewAssistant({
         />
       )}
         </>
+      )}
+      {showBackTop && (
+        <button className="review-v2-back-top" onClick={() => { const container = document.querySelector(".main"); if (container) container.scrollTo({ top: 0, behavior: "smooth" }); else topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }} title="回到顶部" aria-label="回到顶部">
+          <ArrowUp size={16} />
+        </button>
       )}
     </section>
   );
