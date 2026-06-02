@@ -1148,8 +1148,8 @@ button { border: 0; cursor: pointer; }
   height: 44px;
   padding: 0;
   margin-inline: auto;
-  grid-template-columns: 1fr;
-  justify-items: center;
+  display: flex;
+  align-items: center;
   justify-content: center;
   border-radius: 12px;
 }
@@ -3987,7 +3987,7 @@ th,
 
 .review-v2-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px; flex-wrap: wrap; gap: 8px; position: sticky; top: 8px; z-index: 12; background: rgba(10, 13, 20, 0.72); backdrop-filter: var(--glass-blur); border: 1px solid var(--line); border-radius: 12px; }
 .review-v2-toolbar-status { color: var(--muted); font-size: var(--font-xs); }
-.review-v2-toolbar-actions { display: flex; align-items: center; gap: 8px; }
+.review-v2-toolbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .review-v2-toolbar-select {
   height: 30px;
   border: 1px solid var(--line);
@@ -4008,10 +4008,12 @@ th,
   padding: 4px 10px;
   font-size: var(--font-xs);
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .review-v2-selected-chip:not(.review-v2-selected-chip-readable) { display: none; }
-.review-v2-drag-hint { font-size: var(--font-xs); color: var(--muted); }
-.review-v2-toolbar-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--line); color: var(--ink); border-radius: 8px; padding: 4px 10px; font-size: var(--font-xs); cursor: pointer; }
+.review-v2-drag-hint { font-size: var(--font-xs); color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+.review-v2-toolbar-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--line); color: var(--ink); border-radius: 8px; padding: 4px 10px; font-size: var(--font-xs); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 .review-v2-toolbar-btn:hover { border-color: var(--line-hover); }
 
 .review-v2-empty {
@@ -4184,21 +4186,23 @@ th,
 .review-v2-gen-status { display: inline-flex; align-items: center; gap: 6px; color: var(--blue); font-size: var(--font-xs); margin-left: 6px; }
 .review-v2-hotkey span { display: inline-flex; align-items: center; gap: 5px; }
 .review-v2-back-top {
-  position: fixed;
-  right: 28px;
-  bottom: 28px;
-  z-index: 30;
+  position: sticky;
+  bottom: 16px;
+  z-index: 20;
+  align-self: flex-end;
   width: 42px;
   height: 42px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: rgba(15, 19, 32, 0.82);
+  backdrop-filter: var(--glass-blur);
   color: var(--ink);
   box-shadow: var(--shadow-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
 }
 .review-v2-back-top:hover { border-color: var(--green); color: var(--green); }
 

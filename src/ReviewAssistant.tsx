@@ -4,7 +4,7 @@ import {
   Keyboard, Loader2, RefreshCw, RotateCcw, Search, Sparkles, Star, StarOff, Trash2, WandSparkles, X
 } from "lucide-react";
 import clsx from "clsx";
-import type { AppSettings, ReviewGenerationOptions, ReviewSearchResult, ReviewThinkingMode, ReviewWorkspaceMode } from "./lib/shared";
+import type { AppSettings, ReviewChatMessage, ReviewGenerationOptions, ReviewSearchResult, ReviewThinkingMode, ReviewWorkspaceMode } from "./lib/shared";
 import { getReviewApiProfile } from "./lib/shared";
 
 const REVIEW_INITIAL_VISIBLE = 36;
@@ -14,6 +14,7 @@ const RECENT_QUERIES_KEY = "review-recent-queries";
 const MAX_RECENT_QUERIES = 8;
 type ReviewSortMode = "name-asc" | "name-desc" | "time-desc" | "time-asc";
 type ReviewFilterMode = "all" | "image" | "folder" | "selected";
+type ReviewThumbSize = "small" | "medium" | "large";
 
 interface ReviewSessionState {
   query: string;
@@ -73,6 +74,7 @@ export function ReviewAssistant({
   });
   const [sortMode, setSortMode] = useState<ReviewSortMode>("time-desc");
   const [filterMode, setFilterMode] = useState<ReviewFilterMode>("all");
+  const [thumbSize, setThumbSize] = useState<ReviewThumbSize>("medium");
   const [isPointerSelecting, setIsPointerSelecting] = useState(false);
   const pointerSelectModeRef = useRef<"select" | "deselect">("select");
   const [showBackTop, setShowBackTop] = useState(false);
@@ -94,6 +96,12 @@ export function ReviewAssistant({
     targetLength: settings.reviewTargetLength,
     thinkingMode: settings.reviewThinkingMode
   });
+  const [chatMessages, setChatMessages] = useState<ReviewChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatUploadedImages, setChatUploadedImages] = useState<string[]>([]);
+  const [chatting, setChatting] = useState(false);
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const chatDropRef = useRef<HTMLDivElement>(null);
   const loadMoreTimerRef = useRef<number>(0);
   const copyListRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -158,10 +166,15 @@ export function ReviewAssistant({
   }, [batchSeed, copies, preview, query, results, searched, selected, visibleCount]);
 
   useEffect(() => {
-    const onScroll = () => setShowBackTop(window.scrollY > 420);
+    const scrollContainer = document.querySelector(".main") as HTMLElement | null;
+    const target = scrollContainer ?? window;
+    const onScroll = () => {
+      const scrollTop = scrollContainer ? scrollContainer.scrollTop : window.scrollY;
+      setShowBackTop(scrollTop > 420);
+    };
     onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    target.addEventListener("scroll", onScroll, { passive: true });
+    return () => target.removeEventListener("scroll", onScroll);
   }, []);
 
   useEffect(() => {
@@ -263,7 +276,64 @@ export function ReviewAssistant({
     setCopies([]);
     setBatchSeed(1);
     setPreview(results[0] ?? null);
+    setChatMessages([]);
+    setChatInput("");
+    setChatUploadedImages([]);
     showToast("上下文已清空，可以开始新一轮生成。");
+  }
+
+  function handleChatImageFiles(files: FileList | File[]) {
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (!imageFiles.length) return;
+    const readers = imageFiles.map((file) => {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => resolve("");
+        reader.readAsDataURL(file);
+      });
+    });
+    Promise.all(readers).then((urls) => {
+      const valid = urls.filter(Boolean);
+      setChatUploadedImages((prev) => [...prev, ...valid].slice(0, 8));
+    });
+  }
+
+  function removeChatImage(index: number) {
+    setChatUploadedImages((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function sendChatMessage() {
+    if (!chatInput.trim() && !chatUploadedImages.length) return;
+    if (!modelConnected) {
+      showToast("大模型尚未连接，请先检查 API 配置。");
+      return;
+    }
+    const userMessage: ReviewChatMessage = {
+      role: "user",
+      content: chatInput.trim() || "请根据这些图片帮我写好评",
+      images: chatUploadedImages.length > 0 ? [...chatUploadedImages] : undefined
+    };
+    const updatedMessages = [...chatMessages, userMessage];
+    setChatMessages(updatedMessages);
+    setChatInput("");
+    setChatUploadedImages([]);
+    setChatting(true);
+    try {
+      const result = await window.alipayWorkbench.reviewChat(settings, {
+        messages: updatedMessages,
+        query,
+        images: userMessage.images,
+        targetLength: options.targetLength,
+        thinkingMode: options.thinkingMode,
+        customPrompt: customPrompt || undefined
+      });
+      setChatMessages([...updatedMessages, { role: "assistant", content: result.reply }]);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "AI 对话失败");
+    } finally {
+      setChatting(false);
+    }
   }
 
   async function ensureRoot() {
@@ -546,6 +616,8 @@ export function ReviewAssistant({
               onSortChange={setSortMode}
               filterMode={filterMode}
               onFilterChange={setFilterMode}
+              thumbSize={thumbSize}
+              onThumbSizeChange={setThumbSize}
             />
 
             {results.length === 0 && !searching && <ReviewEmptyState query={query} />}
@@ -561,12 +633,18 @@ export function ReviewAssistant({
               onSelectFolderChildren={selectFolderChildren}
               onPreview={setPreview}
               dragPathsFor={dragPathsFor}
+              thumbSize={thumbSize}
             />
 
             {filteredResults.length > visibleCount && (
               <button className="review-v2-load-more" onClick={loadMoreResults} disabled={loadingMore}>
                 {loadingMore ? <Loader2 className="spin" size={16} /> : null}
                 加载更多（剩余 {filteredResults.length - visibleCount} 个）
+              </button>
+            )}
+            {showBackTop && (
+              <button className="review-v2-back-top" onClick={() => { const container = document.querySelector(".main"); if (container) container.scrollTo({ top: 0, behavior: "smooth" }); else topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }} title="回到顶部" aria-label="回到顶部">
+                <ArrowUp size={16} />
               </button>
             )}
           </div>
@@ -591,14 +669,19 @@ export function ReviewAssistant({
           onModelChange={(id) => void handleModelChange(id)}
           loadingModels={loadingModels}
           onLoadModels={() => void loadModels()}
-          onGenerate={() => generate(false)}
-          onNextBatch={() => generate(true)}
-          generating={generating}
-          hasCopies={copies.length > 0}
-          canGenerate={selected.length > 0 || mode === "ai"}
           onClearContext={clearContext}
           hotkey={settings.reviewGenerateHotkey || "Ctrl+Enter"}
           onSaveHotkey={(value) => void saveHotkey(value)}
+          chatMessages={chatMessages}
+          chatInput={chatInput}
+          setChatInput={setChatInput}
+          chatUploadedImages={chatUploadedImages}
+          chatting={chatting}
+          onSend={() => void sendChatMessage()}
+          onImageFiles={handleChatImageFiles}
+          onRemoveImage={removeChatImage}
+          chatFileInputRef={chatFileInputRef}
+          chatDropRef={chatDropRef}
         />
       )}
 
@@ -627,11 +710,6 @@ export function ReviewAssistant({
           onCopy={(text) => void copyToClipboard(text)}
           onRemove={(text) => void removeSavedCopy(text)}
         />
-      )}
-      {showBackTop && (
-        <button className="review-v2-back-top" onClick={() => topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} title="回到顶部" aria-label="回到顶部">
-          <ArrowUp size={16} />
-        </button>
       )}
         </>
       )}
@@ -806,11 +884,18 @@ function ReviewScanProgressBar({ progress, searching }: { progress: ScanProgress
   );
 }
 
-function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCount, onSelectAll, onClear, searching, sortMode, onSortChange, filterMode, onFilterChange }: { selectedImages: number; selectedCards: number; totalResults: number; visibleCount: number; onSelectAll: () => void; onClear: () => void; searching: boolean; sortMode: ReviewSortMode; onSortChange: (mode: ReviewSortMode) => void; filterMode: ReviewFilterMode; onFilterChange: (mode: ReviewFilterMode) => void; }) {
+function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCount, onSelectAll, onClear, searching, sortMode, onSortChange, filterMode, onFilterChange, thumbSize, onThumbSizeChange }: { selectedImages: number; selectedCards: number; totalResults: number; visibleCount: number; onSelectAll: () => void; onClear: () => void; searching: boolean; sortMode: ReviewSortMode; onSortChange: (mode: ReviewSortMode) => void; filterMode: ReviewFilterMode; onFilterChange: (mode: ReviewFilterMode) => void; thumbSize: ReviewThumbSize; onThumbSizeChange: (size: ReviewThumbSize) => void; }) {
   return (
     <div className="review-v2-toolbar">
       <span className="review-v2-toolbar-status">{searching ? "正在检索" : totalResults > 0 ? "按匹配度展示 " + visibleCount + " / " + totalResults : "无结果"}</span>
       <div className="review-v2-toolbar-actions">
+        <div className="review-v2-thumb-size" role="group" aria-label="缩略图大小">
+          {(["small", "medium", "large"] as const).map((size) => (
+            <button key={size} className={clsx(thumbSize === size && "active")} onClick={() => onThumbSizeChange(size)} title={{ small: "小图", medium: "中图", large: "大图" }[size]}>
+              {{ small: "S", medium: "M", large: "L" }[size]}
+            </button>
+          ))}
+        </div>
         <select className="review-v2-toolbar-select" value={filterMode} onChange={(event) => onFilterChange(event.target.value as ReviewFilterMode)}>
           <option value="all">全部</option>
           <option value="image">图片</option>
@@ -835,9 +920,9 @@ function ReviewEmptyState({ query }: { query: string }) {
   return <div className="review-v2-empty"><ImageIcon size={48} /><strong>{query ? "没有找到“" + query + "”相关图片" : "未搜索"}</strong><span>试试换个关键词，或检查图片根目录是否正确。</span></div>;
 }
 
-function ReviewResultGrid({ items, selectedKeys, expandedFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onPreview, dragPathsFor }: { items: ReviewSearchResult[]; selectedKeys: Set<string>; expandedFolders: Set<string>; onToggleExpand: (path: string) => void; onToggle: (item: ReviewSearchResult) => void; onPointerSelect: (item: ReviewSearchResult) => void; onPointerEnterSelect: (item: ReviewSearchResult) => void; onSelectFolderChildren: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; }) {
+function ReviewResultGrid({ items, selectedKeys, expandedFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onPreview, dragPathsFor, thumbSize = "medium" }: { items: ReviewSearchResult[]; selectedKeys: Set<string>; expandedFolders: Set<string>; onToggleExpand: (path: string) => void; onToggle: (item: ReviewSearchResult) => void; onPointerSelect: (item: ReviewSearchResult) => void; onPointerEnterSelect: (item: ReviewSearchResult) => void; onSelectFolderChildren: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; thumbSize?: ReviewThumbSize; }) {
   return (
-    <div className="review-v2-grid">
+    <div className="review-v2-grid" data-thumb-size={thumbSize}>
       {items.map((item) => {
         const isFolder = item.kind === "folder";
         const isSelected = selectedKeys.has(item.path);
@@ -890,26 +975,118 @@ function ReviewPreviewPanel({ preview, selectedImages, selectedCards }: { previe
   );
 }
 
-function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onGenerate, onNextBatch, generating, hasCopies, canGenerate, onClearContext, hotkey, onSaveHotkey }: { query: string; setQuery: (value: string) => void; options: { professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }; setOptions: React.Dispatch<React.SetStateAction<{ professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onGenerate: () => void; onNextBatch: () => void; generating: boolean; hasCopies: boolean; canGenerate: boolean; onClearContext: () => void; hotkey: string; onSaveHotkey: (value: string) => void; }) {
+function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onClearContext, hotkey, onSaveHotkey, chatMessages, chatInput, setChatInput, chatUploadedImages, chatting, onSend, onImageFiles, onRemoveImage, chatFileInputRef, chatDropRef }: { query: string; setQuery: (value: string) => void; options: { professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }; setOptions: React.Dispatch<React.SetStateAction<{ professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onClearContext: () => void; hotkey: string; onSaveHotkey: (value: string) => void; chatMessages: ReviewChatMessage[]; chatInput: string; setChatInput: (v: string) => void; chatUploadedImages: string[]; chatting: boolean; onSend: () => void; onImageFiles: (files: FileList | File[]) => void; onRemoveImage: (index: number) => void; chatFileInputRef: React.RefObject<HTMLInputElement>; chatDropRef: React.RefObject<HTMLDivElement>; }) {
+  const [dragOver, setDragOver] = useState(false);
   return (
-    <section className="review-v2-ai-panel">
-      <div className="review-v2-ai-head"><WandSparkles size={18} /><strong>AI 生成好评</strong><span className="review-v2-ai-tag">高级功能</span><div className="review-v2-ai-model"><select value={selectedModelId} onChange={(e) => onModelChange(e.target.value)}>{availableModels.length === 0 && <option value={selectedModelId}>{selectedModelId || "未选择模型"}</option>}{availableModels.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select><button className="review-v2-ai-refresh" onClick={onLoadModels} disabled={loadingModels} title="刷新可用模型">{loadingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}</button></div></div>
-      <div className="review-v2-sliders">
-        <label className="review-v2-desc review-v2-query-field"><span>商品/搜索词</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="例如：彩棉317 夏季长裤" /></label>
-        <label className="review-v2-desc review-v2-length-field"><span>目标字数：{options.targetLength}</span><input type="range" min={30} max={100} step={5} value={options.targetLength} onChange={(e) => setOptions((p) => ({ ...p, targetLength: Number(e.target.value) }))} /></label>
-        <SliderCompact label="专业" value={options.professionalLevel} onChange={(v) => setOptions((p) => ({ ...p, professionalLevel: v }))} />
-        <SliderCompact label="买家味" value={options.buyerLevel} onChange={(v) => setOptions((p) => ({ ...p, buyerLevel: v }))} />
-        <SliderCompact label="夸张度" value={options.exaggerationLevel} onChange={(v) => setOptions((p) => ({ ...p, exaggerationLevel: v }))} />
-        <SliderCompact label="场景化" value={options.sceneLevel} onChange={(v) => setOptions((p) => ({ ...p, sceneLevel: v }))} />
-        <label className="review-v2-toggle"><span>性价比</span><input type="checkbox" checked={options.mentionValue} onChange={(e) => setOptions((p) => ({ ...p, mentionValue: e.target.checked }))} /><span className="review-v2-toggle-track"><span className="review-v2-toggle-thumb" /></span></label>
+    <section className="review-v2-chat-panel">
+      <div className="review-v2-ai-head">
+        <WandSparkles size={18} />
+        <strong>AI 对话写好评</strong>
+        <span className="review-v2-ai-tag">多轮对话</span>
+        <div className="review-v2-ai-model">
+          <select value={selectedModelId} onChange={(e) => onModelChange(e.target.value)}>
+            {availableModels.length === 0 && <option value={selectedModelId}>{selectedModelId || "未选择模型"}</option>}
+            {availableModels.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+          </select>
+          <button className="review-v2-ai-refresh" onClick={onLoadModels} disabled={loadingModels} title="刷新可用模型">{loadingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}</button>
+        </div>
       </div>
-      <div className="review-v2-thinking-row"><label><span>思考模式</span><select value={options.thinkingMode} onChange={(e) => setOptions((p) => ({ ...p, thinkingMode: e.target.value as ReviewThinkingMode }))}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label></div>
-      <label className="review-v2-desc review-v2-hotkey"><span><Keyboard size={13} /> 生成快捷键</span><input value={hotkey} onChange={(e) => onSaveHotkey(e.target.value)} placeholder="Ctrl+Enter" /></label>
-      <label className="review-v2-desc"><span>商品描述补充</span><textarea value={options.productDescription} onChange={(e) => setOptions((p) => ({ ...p, productDescription: e.target.value }))} placeholder="补充商品卖点，让好评更贴合（可选）" /></label>
-      <button className="review-v2-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}><ChevronDown size={14} className={clsx("review-v2-chev", advancedOpen && "open")} />高级：自定义提示词</button>
-      {advancedOpen && <label className="review-v2-desc"><span>自定义提示词（追加在系统指令后）</span><textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} onBlur={onSaveCustomPrompt} placeholder="例如：多用口语化表达，不要使用书面语" /></label>}
-      <div className="review-v2-buttons"><button className="review-v2-primary" onClick={onGenerate} disabled={generating || !canGenerate || !query.trim()}>{generating ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />}{hasCopies ? "重新生成" : "AI 生成好评"}</button><button className="review-v2-secondary" onClick={onNextBatch} disabled={generating || !hasCopies}>换一批</button><button className="review-v2-ghost" onClick={onClearContext}><RotateCcw size={14} /> 清空</button></div>
-      {generating && <div className="review-v2-gen-status"><Loader2 className="spin" size={14} /> AI 正在生成文案，请稍候</div>}
+
+      <div className="review-v2-chat-messages">
+        {chatMessages.length === 0 && (
+          <div className="review-v2-chat-empty">
+            <WandSparkles size={32} />
+            <strong>AI 对话写好评</strong>
+            <span>输入商品名称和需求，AI 帮你写出优质好评。支持上传图片作为参考。</span>
+          </div>
+        )}
+        {chatMessages.map((msg, i) => (
+          <div key={i} className={clsx("review-v2-chat-bubble", msg.role)}>
+            <div className="review-v2-chat-bubble-content">
+              {msg.images && msg.images.length > 0 && (
+                <div className="review-v2-chat-bubble-images">
+                  {msg.images.map((img, j) => (
+                    <img key={j} src={img} alt={`上传图片 ${j + 1}`} />
+                  ))}
+                </div>
+              )}
+              {msg.content && <p>{msg.content}</p>}
+            </div>
+          </div>
+        ))}
+        {chatting && (
+          <div className="review-v2-chat-bubble assistant">
+            <div className="review-v2-chat-bubble-content">
+              <Loader2 className="spin" size={16} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {chatUploadedImages.length > 0 && (
+        <div className="review-v2-chat-thumbs">
+          {chatUploadedImages.map((url, i) => (
+            <div key={i} className="review-v2-chat-thumb">
+              <img src={url} alt={`待发送 ${i + 1}`} />
+              <button onClick={() => onRemoveImage(i)}><X size={12} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div
+        ref={chatDropRef}
+        className={clsx("review-v2-chat-input-area", dragOver && "drag-over")}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files.length) onImageFiles(e.dataTransfer.files); }}
+      >
+        <input
+          ref={chatFileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => { if (e.target.files?.length) onImageFiles(e.target.files); e.target.value = ""; }}
+        />
+        <button className="review-v2-chat-image-btn" onClick={() => chatFileInputRef.current?.click()} title="上传图片">
+          <ImageIcon size={16} />
+        </button>
+        <input
+          className="review-v2-chat-input"
+          value={chatInput}
+          onChange={(e) => setChatInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+          placeholder={dragOver ? "释放以上传图片" : "输入消息，Enter 发送，Shift+Enter 换行"}
+          disabled={chatting}
+        />
+        <button className="review-v2-chat-send" onClick={onSend} disabled={chatting || (!chatInput.trim() && !chatUploadedImages.length)}>
+          {chatting ? <Loader2 className="spin" size={16} /> : <ArrowUp size={16} />}
+        </button>
+      </div>
+
+      <button className="review-v2-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}>
+        <ChevronDown size={14} className={clsx("review-v2-chev", advancedOpen && "open")} />
+        高级设置（风格、字数、快捷键）
+      </button>
+      {advancedOpen && (
+        <div className="review-v2-chat-advanced">
+          <div className="review-v2-sliders">
+            <label className="review-v2-desc review-v2-query-field"><span>商品/搜索词</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="例如：彩棉317 夏季长裤" /></label>
+            <label className="review-v2-desc review-v2-length-field"><span>目标字数：{options.targetLength}</span><input type="range" min={30} max={100} step={5} value={options.targetLength} onChange={(e) => setOptions((p) => ({ ...p, targetLength: Number(e.target.value) }))} /></label>
+            <SliderCompact label="专业" value={options.professionalLevel} onChange={(v) => setOptions((p) => ({ ...p, professionalLevel: v }))} />
+            <SliderCompact label="买家味" value={options.buyerLevel} onChange={(v) => setOptions((p) => ({ ...p, buyerLevel: v }))} />
+            <SliderCompact label="夸张度" value={options.exaggerationLevel} onChange={(v) => setOptions((p) => ({ ...p, exaggerationLevel: v }))} />
+            <SliderCompact label="场景化" value={options.sceneLevel} onChange={(v) => setOptions((p) => ({ ...p, sceneLevel: v }))} />
+            <label className="review-v2-toggle"><span>性价比</span><input type="checkbox" checked={options.mentionValue} onChange={(e) => setOptions((p) => ({ ...p, mentionValue: e.target.checked }))} /><span className="review-v2-toggle-track"><span className="review-v2-toggle-thumb" /></span></label>
+          </div>
+          <div className="review-v2-thinking-row"><label><span>思考模式</span><select value={options.thinkingMode} onChange={(e) => setOptions((p) => ({ ...p, thinkingMode: e.target.value as ReviewThinkingMode }))}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label></div>
+          <label className="review-v2-desc review-v2-hotkey"><span><Keyboard size={13} /> 生成快捷键</span><input value={hotkey} onChange={(e) => onSaveHotkey(e.target.value)} placeholder="Ctrl+Enter" /></label>
+          <label className="review-v2-desc"><span>商品描述补充</span><textarea value={options.productDescription} onChange={(e) => setOptions((p) => ({ ...p, productDescription: e.target.value }))} placeholder="补充商品卖点（可选）" /></label>
+          <label className="review-v2-desc"><span>自定义提示词（追加在系统指令后）</span><textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} onBlur={onSaveCustomPrompt} placeholder="例如：多用口语化表达，不要使用书面语" /></label>
+          <button className="review-v2-ghost" onClick={onClearContext}><RotateCcw size={14} /> 清空对话</button>
+        </div>
+      )}
     </section>
   );
 }
