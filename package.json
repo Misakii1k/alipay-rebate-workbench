@@ -1,6 +1,6 @@
 {
     "name":  "alipay-rebate-workbench",
-    "version":  "0.9.8",
+    "version": "0.10.1",
     "private":  true,
     "description":  "电商运营工具箱桌面客户端",
     "main":  "dist-electron/electron/main.js",
@@ -57,17 +57,25 @@
                   "nsis":  {
                                "oneClick":  false,
                                "allowToChangeInstallationDirectory":  true,
+                               "allowElevation":  true,
                                "deleteAppDataOnUninstall":  false,
                                "perMachine":  false,
-                               "createDesktopShortcut":  true,
+                               "createDesktopShortcut":  "always",
                                "createStartMenuShortcut":  true,
+                               "shortcutName":  "电商运营工具箱",
                                "include":  "build/installer.nsh",
                                "installerIcon":  "build/icon.ico",
                                "uninstallerIcon":  "build/icon.ico",
                                "installerHeader":  "build/installerHeader.bmp",
                                "installerSidebar":  "build/installerSidebar.bmp",
                                "uninstallerSidebar":  "build/uninstallerSidebar.bmp",
-                               "installerHeaderIcon":  "build/icon.ico"
+                               "installerHeaderIcon":  "build/icon.ico",
+                               "displayLanguageSelector":  false,
+                               "language":  "2052",
+                               "warningsAsErrors":  false,
+                               "artifactName":  "${productName}-${version}-Setup.${ext}",
+                               "unicode":  true,
+                               "differentialPackage":  true
                            }
               },
     "dependencies":  {

@@ -175,6 +175,25 @@ export interface ReviewGenerationResult {
   copies: string[];
 }
 
+export interface ReviewChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  images?: string[];
+}
+
+export interface ReviewChatPayload {
+  messages: ReviewChatMessage[];
+  query: string;
+  images?: string[];
+  targetLength: number;
+  thinkingMode: ReviewThinkingMode;
+  customPrompt?: string;
+}
+
+export interface ReviewChatResult {
+  reply: string;
+}
+
 export type TitleKeywordSource = "market" | "breakdown" | "blue-ocean" | "manual";
 export type TitleCandidateMode = "traffic" | "precise" | "blue-ocean";
 
@@ -351,7 +370,6 @@ export interface RebateRow {
   confidence?: number;
   reason?: string;
   rawText?: string;
-  cloudReview?: CloudReview;
   createdAt?: string;
 }
 
@@ -362,15 +380,6 @@ export interface RecognitionResult {
   reason: string;
   source: "rules" | "text-model" | "vision-model" | "manual";
   rawText?: string;
-}
-
-export interface CloudReview {
-  status: "idle" | "checking" | "passed" | "warning" | "error";
-  valid?: boolean;
-  account?: string;
-  name?: string;
-  confidence?: number;
-  reason?: string;
 }
 
 export interface ClipboardSnapshot {

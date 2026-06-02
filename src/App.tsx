@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import {
   ArrowRight,
   Check,
@@ -28,10 +28,13 @@ import {
   X
 } from "lucide-react";
 import clsx from "clsx";
-import { CompareWorkbench } from "./CompareWorkbench";
-import { ReviewAssistant } from "./ReviewAssistant";
-import { TitleOptimizer } from "./TitleOptimizer";
-import { VideoWorkbench } from "./VideoWorkbench";
+
+// 懒加载大型组件以优化初始加载性能
+const CompareWorkbench = lazy(() => import("./CompareWorkbench").then(m => ({ default: m.CompareWorkbench })));
+const ReviewAssistant = lazy(() => import("./ReviewAssistant").then(m => ({ default: m.ReviewAssistant })));
+const TitleOptimizer = lazy(() => import("./TitleOptimizer").then(m => ({ default: m.TitleOptimizer })));
+const VideoWorkbench = lazy(() => import("./VideoWorkbench").then(m => ({ default: m.VideoWorkbench })));
+
 import { buildRows, exportValidationErrors, formatExportFileName, isValidAccount } from "./lib/parsing";
 import { recognizePartialByRules } from "./lib/recognition";
 import {
@@ -40,7 +43,6 @@ import {
   DEFAULT_API_PROFILE,
   DEFAULT_SETTINGS,
   ModelConnectionStatus,
-  CloudReview,
   RebateRow,
   RebateViewKey,
   RecognitionResult,
@@ -56,9 +58,19 @@ import {
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
 
-const APP_VERSION = "0.9.8";
-const MAKER_CREDIT = "由 Misaki（丛宇航）使用 CodeX 制作";
+const APP_VERSION = "0.10.1";
+const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "录入页「自动读取剪切板」恢复正常：复制账号信息后会自动识别并填入账号和姓名，不再需要手动输入。",
+  "收评助手左侧图片支持 S/M/L 三档缩略图大小切换，右侧预览面板不变。",
+  "AI 生成好评时会参考你选中的商品图片，写出来的文案更贴合实物。",
+  "视频切片功能暂时关闭维护，按钮灰显标注「暂不可用」。",
+  "收评助手的一键回到顶部按钮修好了，滚动之后会自动出现。",
+  "预览和导出界面自动检测同名/同账号的重复行，黄色高亮提醒，不影响正常操作。",
+  "录入界面新增「自动读取剪切板」快捷开关，无需进设置页切换。",
+  "识别过程中可以随时点「取消识别」按钮打断，不用干等了。",
+  "底部快捷栏优化：主题切换和设置图标改为并排图标按钮，去除冗余文字标签，视觉上更紧凑。",
+  "设置页居中面板宽度优化：移除 800px 上限，侧边栏折叠后设置内容自动铺满右侧空间。",
   "安全加固：API 密钥改用系统级安全存储加密，不再明文保存在设置文件中；更新源强制要求 HTTPS；启用了沙箱和内容安全策略等多层防护。",
   "收评助手索引增量更新：第二次及以后的搜索不再全量扫描目录，只检查有变化的文件夹，大幅加快搜索速度。",
   "收评助手文件夹可展开：搜索结果中的文件夹卡片新增展开按钮，点击可展开查看里面的图片，再次点击收起。",
@@ -114,6 +126,7 @@ export default function App() {
   const lastClipboardSignature = useRef("");
   const autoRecognizingRef = useRef(false);
   const skipAutoRecognizeRef = useRef(false);
+  const recognizeAbortRef = useRef<AbortController | null>(null);
   const completionNotifiedRef = useRef(false);
 
   const parsed = useMemo(() => buildRows(amountInput, remarkInput), [amountInput, remarkInput]);
@@ -190,7 +203,6 @@ export default function App() {
       setManualAccount("");
       setManualName("");
       setManualText("");
-      setLastResult(null);
     }
   }, [currentRow?.id]);
 
@@ -333,7 +345,6 @@ export default function App() {
     setManualAccount("");
     setManualName("");
     setManualText("");
-    setLastResult(null);
     showToast("已清空预览列表。");
   }
 
@@ -353,42 +364,18 @@ export default function App() {
     showToast(mode === "append" ? `已追加 ${parsed.rows.length} 条任务。` : `已生成 ${parsed.rows.length} 条任务。`);
   }
 
-  async function recognizeManualText() {
-    if (!manualText.trim()) { showToast("请先粘贴要识别的文字。"); return; }
-    await doRecognizeRef.current(manualText);
+  function cancelRecognition() {
+    recognizeAbortRef.current?.abort();
+    recognizeAbortRef.current = null;
+    setRecognizing(false);
+    autoRecognizingRef.current = false;
+    showToast("已取消识别。");
   }
 
-  async function runCloudReview(index: number, rawText: string, localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">): Promise<CloudReview | undefined> {
-    if (!settings.enhancedCloudValidation || !rawText.trim()) return undefined;
-    setRows((prev) =>
-      prev.map((row, rowIndex) =>
-        rowIndex === index ? { ...row, cloudReview: { status: "checking" as const } } : row
-      )
-    );
-    try {
-      const cloudReview = await window.alipayWorkbench.reviewRecognitionCloud(rawText, localResult, settings);
-      setRows((prev) =>
-        prev.map((row, rowIndex) =>
-          rowIndex === index ? { ...row, cloudReview } : row
-        )
-      );
-      if (cloudReview.valid === false) {
-        showToast("云端校验发现差异，可在当前行查看。");
-      } else if (cloudReview.status === "error") {
-        showToast(cloudReview.reason || "云端校验失败，已保留本地识别结果。");
-      }
-      return cloudReview;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "云端校验失败";
-      const cloudReview: CloudReview = { status: "error", valid: undefined, reason };
-      setRows((prev) =>
-        prev.map((row, rowIndex) =>
-          rowIndex === index ? { ...row, cloudReview } : row
-        )
-      );
-      showToast("云端校验失败，已保留本地识别结果。");
-      return cloudReview;
-    }
+  async function recognizeManualText() {
+    if (recognizing) { cancelRecognition(); return; }
+    if (!manualText.trim()) { showToast("请先粘贴要识别的文字。"); return; }
+    await doRecognizeRef.current(manualText);
   }
 
   async function applyRecognition(result: RecognitionResult, sourceText = "") {
@@ -408,12 +395,6 @@ export default function App() {
       setRecognitionPulse((value) => value + 1);
       showToast(`已识别：${result.name} / ${result.account}`);
       if (settings.autoAdvance) setCurrentIndex((index) => Math.min(index + 1, Math.max(rows.length - 1, 0)));
-      void runCloudReview(recognizedIndex, rawText, {
-        account: result.account,
-        name: result.name,
-        confidence: result.confidence,
-        reason: result.reason
-      });
     } else {
       showToast("已填入可识别字段，请补齐后保存。");
     }
@@ -422,47 +403,25 @@ export default function App() {
   const doRecognizeRef = useRef<(text: string) => Promise<void>>(async () => {});
   doRecognizeRef.current = async (text: string) => {
     if (!currentRow || !text.trim()) return;
+    const abort = new AbortController();
+    recognizeAbortRef.current = abort;
     setRecognizing(true);
     try {
-      const partial = recognizePartialByRules(text);
-      const result = partial && partial.account && partial.name
-        ? partial
-        : await window.alipayWorkbench.recognizeText(text, settings);
-      await applyRecognition(result, text);
+      const result = recognizePartialByRules(text);
+      if (abort.signal.aborted) return;
+      if (result) {
+        await applyRecognition(result, text);
+      } else {
+        if (!abort.signal.aborted) showToast("未识别到账号或姓名，请手动填写。");
+      }
     } catch { /* auto-recognize silent fail */ }
-    finally { setRecognizing(false); }
-  };
-
-  function adoptCloudReview(index: number, cloud: CloudReview) {
-    const cloudAccount = cloud.account?.trim();
-    const cloudName = cloud.name?.trim();
-    if (!cloudAccount && !cloudName) {
-      showToast("云端结果没有可采纳的账号或姓名。");
-      return;
+    finally {
+      if (recognizeAbortRef.current === abort) {
+        recognizeAbortRef.current = null;
+        setRecognizing(false);
+      }
     }
-    setRows((prev) =>
-      prev.map((row, rowIndex) => {
-        if (rowIndex !== index) return row;
-        const account = cloudAccount || row.account;
-        const name = cloudName || row.name;
-        return {
-          ...row,
-          account,
-          name,
-          status: "manual" as const,
-          cloudReview: {
-            ...row.cloudReview,
-            ...cloud,
-            account,
-            name,
-            valid: true,
-            status: "passed" as const
-          }
-        };
-      })
-    );
-    showToast("已采纳云端结果。");
-  }
+  };
 
   async function saveManual() {
     if (!currentRow) return;
@@ -485,7 +444,6 @@ export default function App() {
     );
     showToast("已保存当前行。");
     if (settings.autoAdvance) setCurrentIndex((index) => Math.min(index + 1, Math.max(rows.length - 1, 0)));
-    void runCloudReview(savedIndex, savedRemark, { account: savedAccount, name: savedName, confidence: 1, reason: "手动保存" });
   }
 
   function skipCurrentRow() {
@@ -501,8 +459,8 @@ export default function App() {
 
   async function copyRemark() {
     if (!currentRow) return;
-    await window.alipayWorkbench.writeClipboardText(currentRow.remark);
     skipAutoRecognizeRef.current = true;
+    await window.alipayWorkbench.writeClipboardText(currentRow.remark);
     showToast("备注已复制。");
   }
 
@@ -568,20 +526,20 @@ export default function App() {
             <div className="mini-progress"><i style={{ width: `${sidebarProgress.percent}%` }} /></div>
           </div>
         )}
-        <button className="theme-toggle" onClick={toggleTheme}>
-          {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
-          <span>{theme === "dark" ? "浅色模式" : "深色模式"}</span>
-        </button>
-        {(() => {
-          const settingsItem = toolNavItems.find((item) => item.key === "settings")!;
-          const Icon = settingsItem.icon;
-          return (
-            <button className={clsx("nav-item settings-bottom", activeTool === "settings" && "active")} aria-current={activeTool === "settings" ? "page" : undefined} onClick={() => openTool("settings")}>
-              <Icon size={18} />
-              <span>{settingsItem.label}</span>
-            </button>
-          );
-        })()}
+        <div className="bottom-actions">
+          <button className="bottom-btn" onClick={toggleTheme} title={theme === "dark" ? "切换浅色模式" : "切换深色模式"}>
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          {(() => {
+            const settingsItem = toolNavItems.find((item) => item.key === "settings")!;
+            const Icon = settingsItem.icon;
+            return (
+              <button className={clsx("bottom-btn", activeTool === "settings" && "active")} title={settingsItem.label} onClick={() => openTool("settings")}>
+                <Icon size={16} />
+              </button>
+            );
+          })()}
+        </div>
       </aside>
 
       <main className="main">
@@ -635,27 +593,22 @@ export default function App() {
               {currentRow ? (
                 <>
                   <div className="current-card">
-                    <button className={clsx("remark-copy", recognitionPulse > 0 && "pulse")} key={`copy-pulse-${recognitionPulse}`} onClick={copyRemark}>{currentRow.remark}</button>
+                    <button className="remark-copy" onClick={copyRemark}>{currentRow.remark}</button>
                     <div className="amount">{currentRow.amount}</div>
                     <div className="progress-text">{currentIndex + 1} / {rows.length}</div>
                   </div>
                   <div className="manual-recognize">
                     <label><span>识别文本</span><textarea value={manualText} onChange={(event) => setManualText(event.target.value)} placeholder="粘贴支付宝账号、姓名或聊天内容" /></label>
-                    <button onClick={recognizeManualText} disabled={recognizing}>{recognizing ? <Loader2 className="spin" size={18} /> : <Wand2 size={18} />} 重新识别</button>
+                    <button onClick={recognizeManualText} className={recognizing ? "danger-text" : undefined}>{recognizing ? <><X size={18} /> 取消识别</> : <><Wand2 size={18} /> 重新识别</>}</button>
                   </div>
-                  {settings.enhancedCloudValidation && (
-                    <CloudReviewCard
-                      cloudReview={currentRow.cloudReview}
-                      onAdopt={(cloud) => adoptCloudReview(currentIndex, cloud)}
-                    />
-                  )}
+                  <Toggle checked={settings.autoListenClipboard} label="自动读取剪切板" onChange={(value) => void saveSettings({ ...settings, autoListenClipboard: value })} />
                 </>
               ) : <EmptyState text="请先导入金额和备注。" />}
             </Panel>
             <Panel title="识别结果" icon={Wand2}>
               <div className="form-stack">
                 <label><span>收款方支付宝账号</span><input value={manualAccount} onChange={(event) => setManualAccount(event.target.value)} /></label>
-                <label className="recognized-name-field"><span>收款方姓名</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
+                <label className={clsx("recognized-name-field", recognitionPulse > 0 && "pulse")} key={`name-pulse-${recognitionPulse}`}><span>收款方姓名</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
                 <button className="primary" onClick={saveManual}><Check size={18} /> 保存到当前行</button>
                 <button className="secondary-action light" onClick={skipCurrentRow}><ArrowRight size={18} /> 跳过当前行</button>
               </div>
@@ -664,29 +617,20 @@ export default function App() {
           </section>
         )}
 
-         {view === "preview" && <RowsTable rows={rows} currentIndex={currentIndex} onClear={clearRows} onPick={(index) => { setCurrentIndex(index); setView("entry"); }} onAdoptCloud={adoptCloudReview} settings={settings} />}
+         {view === "preview" && <RowsTable rows={rows} currentIndex={currentIndex} onClear={clearRows} onPick={(index) => { setCurrentIndex(index); setView("entry"); }}  />}
 
         {view === "export" && (
-          <section className="grid-two">
-            <Panel title="导出校验" icon={Download}>
-              <div className="export-name">{exportName}</div>
-              <div className="rebate-total-card"><span>本次返款总金额</span><strong>{formatMoney(totalAmount)}</strong><em>{rows.length} 条 · {doneCount} 条已完成</em></div>
-              <div className={clsx("import-summary", validationErrors.length && "danger")}>
-                <strong>{validationErrors.length ? `发现 ${validationErrors.length} 个问题` : "可以导出"}</strong>
-                <span>导出时会自动追加固定尾行：{settings.fixedTailAccount} / {settings.fixedTailName}</span>
-              </div>
-              <button className="primary" onClick={exportFile} disabled={!rows.length}><Download size={18} /> 导出 Excel</button>
-            </Panel>
-            <Panel title="问题列表" icon={Eye}>
-              <div className="error-list">{validationErrors.length ? validationErrors.map((error) => <span key={error}>{error}</span>) : <EmptyState text="没有发现阻塞导出的问题。" />}</div>
-            </Panel>
-          </section>
+          <ExportView rows={rows} doneCount={doneCount} totalAmount={totalAmount} exportName={exportName} validationErrors={validationErrors} settings={settings} onExport={exportFile} />
         )}
 
-        {view === "video" && <VideoWorkbench settings={settings} onSaveSettings={saveSettings} onStateChange={setVideoState} showToast={showToast} />}
-        {view === "review" && <ReviewAssistant settings={settings} onSaveSettings={saveSettings} showToast={showToast} modelConnected={modelStatus.state === "connected"} />}
-        {view === "title" && <TitleOptimizer settings={settings} onSaveSettings={saveSettings} showToast={showToast} />}
-        {view === "compare" && <CompareWorkbench settings={settings} showToast={showToast} />}
+        {/* 懒加载组件用 Suspense 包装，显示加载状态 */}
+        <Suspense fallback={<div className="loading-fallback"><Loader2 className="spin" size={32} /><span>加载中...</span></div>}>
+          {view === "video" && <VideoWorkbench settings={settings} onSaveSettings={saveSettings} onStateChange={setVideoState} showToast={showToast} />}
+          {view === "review" && <ReviewAssistant settings={settings} onSaveSettings={saveSettings} showToast={showToast} modelConnected={modelStatus.state === "connected"} />}
+          {view === "title" && <TitleOptimizer settings={settings} onSaveSettings={saveSettings} showToast={showToast} />}
+          {view === "compare" && <CompareWorkbench settings={settings} showToast={showToast} />}
+        </Suspense>
+
         {view === "settings" && <SettingsView settings={settings} onSave={saveSettings} modelStatus={modelStatus} onTestModel={async (draft) => {
           setModelStatus({ state: "testing", detail: "正在测试大模型连接" });
           const result = await window.alipayWorkbench.testModelConnection(draft);
@@ -766,14 +710,84 @@ function PreviewRows({ amountLines, remarkLines }: { amountLines: string[]; rema
   return <div className="preview-list">{Array.from({ length: visibleCount }).map((_, index) => <div key={index} className="preview-row"><span>{index + 1}</span><b>{amountLines[index] || "-"}</b><em>{remarkLines[index] || "-"}</em></div>)}</div>;
 }
 
-function RowsTable({ rows, currentIndex, onPick, onClear, onAdoptCloud, settings }: { rows: RebateRow[]; currentIndex: number; onPick: (index: number) => void; onClear: () => void; onAdoptCloud: (index: number, cloud: CloudReview) => void; settings: AppSettings }) {
+function computeDuplicateWarnings(rows: RebateRow[]): string[] {
+  const nameCount = new Map<string, number>();
+  const accountCount = new Map<string, number>();
+  for (const row of rows) {
+    const n = row.name.trim();
+    const a = row.account.trim();
+    if (n && n !== "待填写") nameCount.set(n, (nameCount.get(n) || 0) + 1);
+    if (a && a !== "待填写") accountCount.set(a, (accountCount.get(a) || 0) + 1);
+  }
+  const warnings: string[] = [];
+  for (const [k, v] of nameCount) if (v >= 2) warnings.push(`同实名"${k}"出现 ${v} 次`);
+  for (const [k, v] of accountCount) if (v >= 2) warnings.push(`同账户"${k}"出现 ${v} 次`);
+  return warnings;
+}
+
+function ExportView({ rows, doneCount, totalAmount, exportName, validationErrors, settings, onExport }: { rows: RebateRow[]; doneCount: number; totalAmount: number; exportName: string; validationErrors: string[]; settings: AppSettings; onExport: () => void }) {
+  const dupWarnings = useMemo(() => computeDuplicateWarnings(rows), [rows]);
+  return (
+    <section className="grid-two">
+      <Panel title="导出校验" icon={Download}>
+        <div className="export-name">{exportName}</div>
+        <div className="rebate-total-card"><span>本次返款总金额</span><strong>{formatMoney(totalAmount)}</strong><em>{rows.length} 条 · {doneCount} 条已完成</em></div>
+        {dupWarnings.length > 0 && (
+          <div className="duplicate-warning-bar">
+            <strong>异常提醒（不阻止导出）</strong>
+            <span>{dupWarnings.join("；")}</span>
+          </div>
+        )}
+        <div className={clsx("import-summary", validationErrors.length && "danger")}>
+          <strong>{validationErrors.length ? `发现 ${validationErrors.length} 个问题` : "可以导出"}</strong>
+          <span>导出时会自动追加固定尾行：{settings.fixedTailAccount} / {settings.fixedTailName}</span>
+        </div>
+        <button className="primary" onClick={onExport} disabled={!rows.length}><Download size={18} /> 导出 Excel</button>
+      </Panel>
+      <Panel title="问题列表" icon={Eye}>
+        <div className="error-list">{validationErrors.length ? validationErrors.map((error) => <span key={error}>{error}</span>) : <EmptyState text="没有发现阻塞导出的问题。" />}</div>
+      </Panel>
+    </section>
+  );
+}
+
+function RowsTable({ rows, currentIndex, onPick, onClear } : { rows: RebateRow[]; currentIndex: number; onPick: (index: number) => void; onClear: () => void }) {
+  const duplicates = useMemo(() => {
+    const nameCount = new Map<string, number>();
+    const accountCount = new Map<string, number>();
+    for (const row of rows) {
+      const n = row.name.trim();
+      const a = row.account.trim();
+      if (n && n !== "待填写") nameCount.set(n, (nameCount.get(n) || 0) + 1);
+      if (a && a !== "待填写") accountCount.set(a, (accountCount.get(a) || 0) + 1);
+    }
+    const dupNames = new Set<string>();
+    const dupAccounts = new Set<string>();
+    for (const [k, v] of nameCount) if (v >= 2) dupNames.add(k);
+    for (const [k, v] of accountCount) if (v >= 2) dupAccounts.add(k);
+    const warnings: string[] = [];
+    for (const name of dupNames) warnings.push(`同实名"${name}"出现 ${nameCount.get(name)} 次`);
+    for (const acc of dupAccounts) warnings.push(`同账户"${acc}"出现 ${accountCount.get(acc)} 次`);
+    return { dupNames, dupAccounts, warnings };
+  }, [rows]);
+
   return (
     <Panel title="完整预览" icon={Eye} action={<button className="secondary-action danger-text compact" onClick={onClear}><Eraser size={16} /> 清空列表</button>}>
+      {duplicates.warnings.length > 0 && (
+        <div className="duplicate-warning-bar">
+          <strong>异常提醒</strong>
+          <span>{duplicates.warnings.join("；")}</span>
+        </div>
+      )}
       {rows.length ? (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>序号</th><th>账号</th><th>姓名</th><th>金额</th><th>备注</th><th>状态</th>{settings.enhancedCloudValidation && <th>云端校验</th>}<th>处理</th></tr></thead>
-            <tbody>{rows.map((row, index) => <tr key={row.id} className={clsx(index === currentIndex && "selected")}><td>{index + 1}</td><td>{row.account || "待填写"}</td><td>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td>{settings.enhancedCloudValidation && <td>{renderCloudReviewStatus(row.cloudReview, index, onAdoptCloud)}</td>}<td><button onClick={() => onPick(index)}>编辑</button></td></tr>)}</tbody>
+            <thead><tr><th>序号</th><th>账号</th><th>姓名</th><th>金额</th><th>备注</th><th>状态</th><th>处理</th></tr></thead>
+            <tbody>{rows.map((row, index) => {
+              const isDupName = duplicates.dupNames.has(row.name.trim());
+              const isDupAccount = duplicates.dupAccounts.has(row.account.trim());
+              return <tr key={row.id} className={clsx(index === currentIndex && "selected", (isDupName || isDupAccount) && "duplicate-row")}><td>{index + 1}</td><td className={clsx(isDupAccount && "duplicate-cell")}>{row.account || "待填写"}</td><td className={clsx(isDupName && "duplicate-cell")}>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td><td><button onClick={() => onPick(index)}>编辑</button></td></tr>;
+            })}</tbody>
           </table>
         </div>
       ) : <EmptyState text="当前没有返款列表，请先在批量导入中生成。" />}
@@ -781,48 +795,7 @@ function RowsTable({ rows, currentIndex, onPick, onClear, onAdoptCloud, settings
   );
 }
 
-function renderCloudReviewStatus(cloudReview: CloudReview | undefined, index: number, onAdoptCloud: (index: number, cloud: CloudReview) => void) {
-  if (cloudReview?.status === "checking") {
-    return <span className="cloud-status checking"><Loader2 className="spin" size={12} /><span>校验中</span></span>;
-  }
-  if (cloudReview?.valid === true) return <span className="cloud-status valid">✓ 一致</span>;
-  if (cloudReview?.valid === false) {
-    return (
-      <div className="cloud-status warning">
-        <span>⚠ {cloudReview.account || "—"} / {cloudReview.name || "—"}</span>
-        <button className="cloud-adopt-btn" onClick={() => onAdoptCloud(index, cloudReview)}>采纳</button>
-      </div>
-    );
-  }
-  if (cloudReview?.status === "error") return <span className="cloud-status error" title={cloudReview.reason}>校验失败</span>;
-  return <span className="cloud-status idle">—</span>;
-}
 
-function CloudReviewCard({ cloudReview, onAdopt }: { cloudReview?: CloudReview; onAdopt: (cloud: CloudReview) => void }) {
-  if (!cloudReview) {
-    return <div className="cloud-review-card idle"><strong>云端复核</strong><span>识别或保存后自动校验账号和姓名。</span></div>;
-  }
-  if (cloudReview.status === "checking") {
-    return <div className="cloud-review-card checking"><strong><Loader2 className="spin" size={14} /> 云端复核中</strong><span>正在比对备注、本地识别结果和云端判断。</span></div>;
-  }
-  if (cloudReview.valid === true) {
-    return <div className="cloud-review-card valid"><strong>✓ 云端复核一致</strong><span>{cloudReview.reason || "账号和姓名与云端判断一致。"}</span></div>;
-  }
-  if (cloudReview.valid === false) {
-    return (
-      <div className="cloud-review-card warning">
-        <strong>⚠ 云端发现差异</strong>
-        <span>{cloudReview.account || "—"} / {cloudReview.name || "—"}</span>
-        {cloudReview.reason && <em>{cloudReview.reason}</em>}
-        <button className="cloud-adopt-btn" onClick={() => onAdopt(cloudReview)}>采纳云端结果</button>
-      </div>
-    );
-  }
-  if (cloudReview.status === "error") {
-    return <div className="cloud-review-card error"><strong>云端复核失败</strong><span>{cloudReview.reason || "请检查 API 配置或稍后重试。"}</span></div>;
-  }
-  return <div className="cloud-review-card idle"><strong>云端复核</strong><span>暂无复核结果。</span></div>;
-}
 
 function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings: AppSettings; onSave: (settings: AppSettings) => void; modelStatus: ModelConnectionStatus; onTestModel: (settings: AppSettings) => Promise<ModelConnectionStatus> }) {
   const [draft, setDraft] = useState(settings);
@@ -956,7 +929,7 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
   const cap = detectModelCapabilities(activeProfile.textModel, activeProfile.apiType);
 
   const sections = [
-    { key: "global" as const, label: "全局设置", icon: Settings, description: "工具箱名称、API 与 OCR" },
+    { key: "global" as const, label: "全局设置", icon: Settings, description: "工具箱名称与 API" },
     { key: "rebate" as const, label: "支付宝返款", icon: FileSpreadsheet, description: "导出规则与识别设置" },
     { key: "video" as const, label: "视频批量剪辑", icon: Film, description: "视频库、输出目录、FFmpeg" },
     { key: "review" as const, label: "收评助手", icon: MessageSquareText, description: "图片根目录与 AI 文案参数" },
@@ -1070,12 +1043,11 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
         <button className="secondary-action" onClick={() => void handleTestModel(draft)} disabled={testingModel}>
           {testingModel ? <><Loader2 size={17} className="spin" /> 测试中…</> : <><KeyRound size={17} /> 测试大模型连接</>}
         </button>
-        <div className="hint-card">页面底部会显示：{MAKER_CREDIT}</div>
       </div></Panel></section>}
       {section === "rebate" && <section className="settings-grid single"><Panel title="支付宝返款设置" icon={FileSpreadsheet}><div className="form-stack"><label><span>导出文件名中的名字</span><input value={draft.exportNameOwner} onChange={(event) => set("exportNameOwner", event.target.value)} /></label><label><span>固定尾行支付宝账号</span><input value={draft.fixedTailAccount} onChange={(event) => set("fixedTailAccount", event.target.value)} /></label><label><span>固定尾行姓名</span><input value={draft.fixedTailName} onChange={(event) => set("fixedTailName", event.target.value)} /></label><Toggle checked={draft.autoListenClipboard} label="录入页自动读取剪切板" onChange={(value) => set("autoListenClipboard", value)} /><Toggle checked={draft.enhancedCloudValidation} label="启用云端 AI 二次校验识别结果" onChange={(value) => set("enhancedCloudValidation", value)} /></div></Panel></section>}
-      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")}>选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")}>选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()}>指定 FFmpeg</button><div className="hint-card">切片音乐默认使用内置 CC0 音乐。{MAKER_CREDIT}</div></div></Panel></section>}
+      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")}>选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")}>选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()}>指定 FFmpeg</button><div className="hint-card">切片音乐默认使用内置 CC0 音乐。</div></div></Panel></section>}
       {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")}>选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><label><span>云端更新源 URL</span><input value={draft.updateFeedUrl} onChange={(event) => set("updateFeedUrl", event.target.value)} /></label></div></Panel></section>}
-      {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()}><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div><div className="hint-card">{MAKER_CREDIT}</div></div></Panel></section>}
+      {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()}><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><span className="settings-autosave-hint">{lastSaved ? `已自动保存 ${new Date(lastSaved).toLocaleTimeString()}` : ""}</span></div>
     </section>
@@ -1169,4 +1141,6 @@ function statusLabel(status: RebateRow["status"]) {
 function modelStatusLabel(state: ModelConnectionStatus["state"]) {
   return { unknown: "未测试", testing: "测试中", connected: "已连接", failed: "失败" }[state];
 }
+
+
 
