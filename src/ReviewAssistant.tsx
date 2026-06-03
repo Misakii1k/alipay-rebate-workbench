@@ -818,7 +818,7 @@ function ReviewHero({
     <div className="review-v2-hero">
       <div className="review-v2-hero-head">
         <Sparkles size={22} />
-        <strong>收评助手</strong>
+        <h2>收评助手</h2>
       </div>
 
       {mode !== "ai" && (
