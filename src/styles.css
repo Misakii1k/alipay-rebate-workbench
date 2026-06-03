@@ -2883,8 +2883,11 @@ td.duplicate-cell { font-weight: 700; color: #f59e0b; }
 
 .candidate-list button:hover { border-color: rgba(52,211,153,0.12); background: var(--green-dim); transform: translateY(-1px); }
 
-.candidate-thumb { display: grid; place-items: center; aspect-ratio: 4/3; overflow: hidden; border-radius: 9px; background: rgba(255,255,255,0.02); color: var(--muted); }
+.candidate-thumb { display: grid; place-items: center; aspect-ratio: 4/3; overflow: hidden; border-radius: 9px; background: rgba(255,255,255,0.02); color: var(--muted); position: relative; }
 .candidate-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.candidate-video-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; background: #000; }
+.candidate-play-badge { position: absolute; bottom: 6px; right: 6px; z-index: 2; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; background: rgba(0,0,0,0.55); color: #fff; backdrop-filter: blur(4px); pointer-events: none; }
+.candidate-thumb:hover .candidate-play-badge { opacity: 0; transition: opacity 0.2s; }
 
 .inline-mini { min-height: 28px; padding: 0 9px; border-radius: 7px; background: var(--green-dim); border: 1px solid rgba(52,211,153,0.10); color: var(--green); font-weight: 700; font-size: var(--font-xs); }
 

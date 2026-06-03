@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, FileAudio, FolderOpen, ImagePlus, Loader2, List, Play, Plus, Search, Scissors, Stethoscope, Table2, Trash2, Video, X } from "lucide-react";
 import clsx from "clsx";
 import type { AppSettings, FfmpegStatus, VideoCandidate, VideoRenderProgress, VideoTask, VideoTemplateId } from "./lib/shared";
@@ -574,6 +574,37 @@ function TaskQueue({ tasks, currentIndex, onPick, onRemove }: { tasks: VideoTask
   );
 }
 
+function CandidateThumb({ candidate }: { candidate: VideoCandidate }) {
+  const [hovering, setHovering] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const isVideo = candidate.kind === "video";
+  const isElectron = Boolean(window.alipayWorkbench && !(window.alipayWorkbench as unknown as Record<string, unknown>).__mock);
+
+  const handleEnter = useCallback(() => { if (isVideo) setHovering(true); }, [isVideo]);
+  const handleLeave = useCallback(() => {
+    setHovering(false);
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.removeAttribute("src"); videoRef.current.load(); }
+  }, []);
+
+  useEffect(() => {
+    if (hovering && isVideo && videoRef.current && isElectron) {
+      const normalizedPath = candidate.path.replace(/\\/g, "/");
+      videoRef.current.src = `file:///${normalizedPath.replace(/^\/+/, "")}`;
+      videoRef.current.play().catch(() => {/* ignore autoplay errors */});
+    }
+  }, [hovering, isVideo, isElectron, candidate.path]);
+
+  return (
+    <div className="candidate-thumb" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
+      {candidate.thumbnailDataUrl ? <img src={candidate.thumbnailDataUrl} alt="" /> : <Video size={28} />}
+      {hovering && isVideo && isElectron && (
+        <video ref={videoRef} className="candidate-video-preview" muted loop playsInline />
+      )}
+      {isVideo && <span className="candidate-play-badge"><Play size={12} /></span>}
+    </div>
+  );
+}
+
 function CandidateModal({
   candidates,
   view,
@@ -601,7 +632,7 @@ function CandidateModal({
         <div className={clsx("candidate-list", view)}>
           {candidates.length ? candidates.map((candidate) => (
             <button key={candidate.path} onClick={() => onPick(candidate)}>
-              {view === "thumb" && <div className="candidate-thumb">{candidate.thumbnailDataUrl ? <img src={candidate.thumbnailDataUrl} /> : <Video size={28} />}</div>}
+              {view === "thumb" && <CandidateThumb candidate={candidate} />}
               <strong>{candidate.fileName}</strong>
               <span>匹配度 {candidate.score} · {candidate.reason}</span>
               <em>{candidate.matchedPath || candidate.path}</em>

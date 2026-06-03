@@ -166,7 +166,7 @@ export function ReviewAssistant({
   }, [batchSeed, copies, preview, query, results, searched, selected, visibleCount]);
 
   useEffect(() => {
-    const scrollContainer = document.querySelector(".main") as HTMLElement | null;
+    const scrollContainer = document.querySelector("main.main") as HTMLElement | null;
     const target = scrollContainer ?? window;
     const onScroll = () => {
       const scrollTop = scrollContainer ? scrollContainer.scrollTop : window.scrollY;
@@ -571,6 +571,7 @@ export function ReviewAssistant({
   }
 
   return (
+    <>
     <section className={clsx("review-assistant review-v2", searched && "searched")}>
       <div ref={topRef} className="review-v2-top-anchor" />
       {showModeSelect ? (
@@ -708,12 +709,13 @@ export function ReviewAssistant({
       )}
         </>
       )}
-      {showBackTop && (
-        <button className="review-v2-back-top" onClick={() => { const container = document.querySelector(".main"); if (container) container.scrollTo({ top: 0, behavior: "smooth" }); else topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }} title="回到顶部" aria-label="回到顶部">
-          <ArrowUp size={16} />
-        </button>
-      )}
     </section>
+    {showBackTop && (
+      <button className="review-v2-back-top" onClick={() => { const container = document.querySelector("main.main"); if (container) container.scrollTo({ top: 0, behavior: "smooth" }); else topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }} title="回到顶部" aria-label="回到顶部">
+        <ArrowUp size={16} />
+      </button>
+    )}
+    </>
   );
 }
 
