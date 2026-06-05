@@ -2829,6 +2829,18 @@ td.duplicate-cell { font-weight: 700; color: #f59e0b; }
 .video-actions { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: stretch; gap: 6px; }
 .video-actions button { justify-content: center; min-height: var(--control-height); height: auto; width: 100%; margin-top: 0; white-space: normal; font-size: var(--font-sm); line-height: 1.25; }
 
+.speed-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: var(--control-height); padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.04); color: var(--muted); font-size: var(--font-xs); cursor: pointer;
+  transition: all 0.15s ease;
+}
+.speed-toggle:hover { border-color: var(--green-dim); color: var(--text); }
+.speed-toggle.active { border-color: var(--green); background: rgba(52,211,153,0.12); color: var(--green); }
+[data-theme="light"] .speed-toggle { background: rgba(0,0,0,0.03); }
+[data-theme="light"] .speed-toggle:hover { border-color: var(--green); background: rgba(155,77,47,0.08); }
+[data-theme="light"] .speed-toggle.active { border-color: var(--green); background: rgba(155,77,47,0.12); color: var(--green); }
+
 .queue-summary {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: var(--control-height); height: auto; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);

@@ -98,11 +98,11 @@ function scoreMediaCandidate(root: string, filePath: string, terms: string[]): V
     reason: reasons.slice(0, 3).join("；") || "路径文字相似",
     kind: videoExts.has(ext) ? "video" : "image",
     matchedPath: relative,
-    thumbnailDataUrl: imageExts.has(ext) ? imageToDataUrl(filePath, 280) : undefined
+    thumbnailDataUrl: undefined
   };
 }
 
-async function scanVideoLibrary(settings: AppSettings, productName: string, colorName: string): Promise<VideoCandidate[]> {
+async function scanVideoLibrary(settings: AppSettings, productName: string, colorName: string, speedMode = false): Promise<VideoCandidate[]> {
   const root = settings.videoLibraryDir;
   if (!root || !existsSync(root)) throw new Error("请先在设置中选择视频库文件夹。");
 
@@ -118,11 +118,21 @@ async function scanVideoLibrary(settings: AppSettings, productName: string, colo
     files = await walkMedia(root, allExts, 8000);
   }
   const terms = buildMatchTerms(`${productName} ${colorName}`);
-  return files
+  const candidates = files
     .map((filePath) => scoreMediaCandidate(root, filePath, terms))
     .filter((item): item is VideoCandidate => Boolean(item && item.score >= 35))
     .sort((a, b) => b.score - a.score)
     .slice(0, 80);
+
+  for (const candidate of candidates) {
+    if (speedMode) continue;
+    const ext = path.extname(candidate.path).toLowerCase();
+    if (imageExts.has(ext)) {
+      candidate.thumbnailDataUrl = imageToDataUrl(candidate.path, 280);
+    }
+  }
+
+  return candidates;
 }
 
 // ============================================================================
@@ -347,6 +357,6 @@ async function renderVideoTask(payload: VideoRenderPayload): Promise<VideoRender
  * 注册视频相关的 IPC handlers。
  */
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("video:scanLibrary", (_event, settings: AppSettings, productName: string, colorName: string) => scanVideoLibrary(settings, productName, colorName));
+  ipcMain.handle("video:scanLibrary", (_event, settings: AppSettings, productName: string, colorName: string, speedMode?: boolean) => scanVideoLibrary(settings, productName, colorName, speedMode));
   ipcMain.handle("video:renderTask", (_event, payload: VideoRenderPayload) => renderVideoTask(payload));
 }

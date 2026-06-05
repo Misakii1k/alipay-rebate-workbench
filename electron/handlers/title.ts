@@ -381,16 +381,30 @@ async function collectTitleExtraKeywords(settings: AppSettings, data: TitleKeywo
   return extras;
 }
 
+function splitTitleTargetKeywords(value: string): string[] {
+  return String(value || "")
+    .split(/[\s,，、;；\n\r]+/)
+    .map((word) => sanitizeTitleKeyword(word))
+    .filter((word) => word.length >= 2 && !containsThirdPartyBrand(word))
+    .slice(0, 40);
+}
+
 async function generateTitleCandidates(settings: AppSettings, payload: TitleGeneratePayload) {
   const data = await loadTitleKeywordData(settings);
-  const extra = await collectTitleExtraKeywords(settings, data, payload.productName, payload.categoryName);
-  return generateTitleScore(data, payload.productName, payload.categoryName, payload.variantCount, extra);
+  const strategy = payload.strategy ?? "stacked-v2";
+  const normalized = normalizeSettings(settings);
+  const targetKeywords = [...splitTitleTargetKeywords(normalized.titleExtraKeywords), ...(payload.targetKeywords ?? [])];
+  const extra = strategy === "stacked-v2" ? targetKeywords : await collectTitleExtraKeywords(settings, data, payload.productName, payload.categoryName);
+  return generateTitleScore(data, payload.productName, payload.categoryName, payload.variantCount, extra, strategy, targetKeywords);
 }
 
 async function analyzeTitle(settings: AppSettings, payload: TitleAnalyzePayload) {
   const data = await loadTitleKeywordData(settings);
-  const extra = await collectTitleExtraKeywords(settings, data, payload.productName, payload.categoryName);
-  return analyzeTitleScore(data, payload, extra);
+  const strategy = payload.strategy ?? "stacked-v2";
+  const normalized = normalizeSettings(settings);
+  const targetKeywords = [...splitTitleTargetKeywords(normalized.titleExtraKeywords), ...(payload.targetKeywords ?? [])];
+  const extra = strategy === "stacked-v2" ? targetKeywords : await collectTitleExtraKeywords(settings, data, payload.productName, payload.categoryName);
+  return analyzeTitleScore(data, payload, extra, strategy, targetKeywords);
 }
 
 /**

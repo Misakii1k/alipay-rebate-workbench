@@ -44,6 +44,7 @@ export interface AppSettings {
   videoLibraryDir: string;
   videoOutputDir: string;
   ffmpegPath: string;
+  videoSpeedMode: boolean;
   videoTemplate: VideoTemplateId;
   updateFeedUrl: string;
   reviewRootDir: string;
@@ -195,7 +196,8 @@ export interface ReviewChatResult {
 }
 
 export type TitleKeywordSource = "market" | "breakdown" | "blue-ocean" | "manual";
-export type TitleCandidateMode = "traffic" | "precise" | "blue-ocean";
+export type TitleGenerationStrategy = "legacy" | "stacked-v2";
+export type TitleCandidateMode = "traffic" | "precise" | "category" | "blue-ocean" | "legacy";
 
 export interface TitleKeywordEntry {
   keyword: string;
@@ -240,12 +242,16 @@ export interface TitleGeneratePayload {
   productName: string;
   categoryName?: string;
   variantCount?: number;
+  strategy?: TitleGenerationStrategy;
+  targetKeywords?: string[];
 }
 
 export interface TitleAnalyzePayload {
   productName: string;
   title: string;
   categoryName?: string;
+  strategy?: TitleGenerationStrategy;
+  targetKeywords?: string[];
 }
 
 export interface TitleRuleCheck {
@@ -305,6 +311,12 @@ export interface TitleCandidate {
   substringHits: SubstringHit[];
   recommendations: TitleRecommendation[];
   suggestions: string[];
+  strategy?: TitleGenerationStrategy;
+  strictPass?: boolean;
+  targetHits?: Array<{ target: string; matched: string; kind: "exact" | "replacement" | "expanded"; source: "manual" | "excel"; rank?: number; category?: string }>;
+  sourceTerms?: Array<{ text: string; source: TitleKeywordSource | "manual" | "derived" | "rule"; parent?: string; rank?: number; category?: string }>;
+  blockedTerms?: string[];
+  unplacedTerms?: string[];
 }
 
 export interface TitleGenerationDiagnostics {
@@ -313,6 +325,8 @@ export interface TitleGenerationDiagnostics {
   generatedCount: number;
   elapsedMs: number;
   exactFitCount?: number;
+  strictRejectedCount?: number;
+  legacyCandidateCount?: number;
 }
 
 export interface TitleScoreResult {
@@ -360,6 +374,15 @@ export interface UpdateStatus {
   detail: string;
 }
 
+export interface CloudReview {
+  status: "idle" | "checking" | "passed" | "warning" | "error";
+  valid?: boolean;
+  account?: string;
+  name?: string;
+  confidence?: number;
+  reason?: string;
+}
+
 export interface RebateRow {
   id: string;
   amount: string;
@@ -371,6 +394,7 @@ export interface RebateRow {
   reason?: string;
   rawText?: string;
   createdAt?: string;
+  cloudReview?: CloudReview;
 }
 
 export interface RecognitionResult {
@@ -380,6 +404,20 @@ export interface RecognitionResult {
   reason: string;
   source: "rules" | "text-model" | "vision-model" | "manual";
   rawText?: string;
+}
+
+export type RecognitionFinalChoiceMode = "local" | "manual" | "cloud";
+
+export interface RecognitionLearningPayload {
+  rawText?: string;
+  localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">;
+  cloudReview?: CloudReview;
+  finalChoice: { account: string; name: string; mode: RecognitionFinalChoiceMode };
+}
+
+export interface RecognitionLearningResult {
+  note: string;
+  reason: string;
 }
 
 export interface ClipboardSnapshot {
@@ -398,6 +436,7 @@ export interface ExportPayload {
 export interface ExportResult {
   canceled: boolean;
   filePath?: string;
+  error?: string;
 }
 
 export interface ModelConnectionStatus {
@@ -451,6 +490,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   videoLibraryDir: "",
   videoOutputDir: "",
   ffmpegPath: "",
+  videoSpeedMode: false,
   videoTemplate: "bos-template",
   updateFeedUrl: "",
   reviewRootDir: "",
@@ -561,6 +601,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     videoLibraryDir: String(raw.videoLibraryDir ?? ""),
     videoOutputDir: String(raw.videoOutputDir ?? ""),
     ffmpegPath: String(raw.ffmpegPath ?? ""),
+    videoSpeedMode: Boolean(raw.videoSpeedMode),
     videoTemplate: normalizeVideoTemplate(raw.videoTemplate),
     updateFeedUrl: String(raw.updateFeedUrl ?? ""),
     reviewRootDir: String(raw.reviewRootDir ?? ""),

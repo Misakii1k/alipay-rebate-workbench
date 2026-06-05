@@ -2,10 +2,14 @@ import * as electron from "electron";
 import type {
   AppSettings,
   ClipboardSnapshot,
+  CloudReview,
   ExportPayload,
   ExportResult,
   FfmpegStatus,
   ModelConnectionStatus,
+  RecognitionLearningPayload,
+  RecognitionLearningResult,
+  RecognitionResult,
   ReviewGenerationOptions,
   ReviewGenerationResult,
   ReviewChatPayload,
@@ -53,8 +57,8 @@ const api = {
   getFfmpegStatus: (settings: AppSettings): Promise<FfmpegStatus> => ipcRenderer.invoke("ffmpeg:status", settings),
   diagnoseFfmpeg: (settings: AppSettings): Promise<{ items: Array<{ label: string; passed: boolean; detail: string }>; suggestions: string[]; ok: boolean }> => ipcRenderer.invoke("ffmpeg:diagnose", settings),
   autoFixFfmpeg: (settings: AppSettings): Promise<{ fixed: string[]; failed: string[]; settingsPatch: Partial<AppSettings> | null }> => ipcRenderer.invoke("ffmpeg:autoFix", settings),
-  scanVideoLibrary: (settings: AppSettings, productName: string, colorName: string): Promise<VideoCandidate[]> =>
-    ipcRenderer.invoke("video:scanLibrary", settings, productName, colorName),
+  scanVideoLibrary: (settings: AppSettings, productName: string, colorName: string, speedMode?: boolean): Promise<VideoCandidate[]> =>
+    ipcRenderer.invoke("video:scanLibrary", settings, productName, colorName, speedMode),
   renderVideoTask: (payload: VideoRenderPayload): Promise<VideoRenderResult> => ipcRenderer.invoke("video:renderTask", payload),
   onVideoRenderProgress: (callback: (progress: VideoRenderProgress) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: VideoRenderProgress) => callback(progress);
@@ -94,7 +98,13 @@ const api = {
   },
   readClipboard: (): Promise<ClipboardSnapshot> => ipcRenderer.invoke("clipboard:read"),
   writeClipboardText: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:writeText", text),
-  exportWorkbook: (payload: ExportPayload): Promise<ExportResult> => ipcRenderer.invoke("export:workbook", payload)
+  exportWorkbook: (payload: ExportPayload): Promise<ExportResult> => ipcRenderer.invoke("export:workbook", payload),
+  recognizeText: (text: string, settings: AppSettings): Promise<RecognitionResult> =>
+    ipcRenderer.invoke("recognition:recognizeText", text, settings),
+  reviewRecognitionCloud: (rawText: string, localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">, settings: AppSettings): Promise<CloudReview> =>
+    ipcRenderer.invoke("recognition:cloudReview", rawText, localResult, settings),
+  learnFromChoice: (payload: RecognitionLearningPayload, settings: AppSettings): Promise<RecognitionLearningResult> =>
+    ipcRenderer.invoke("recognition:learnFromChoice", payload, settings)
 };
 
 contextBridge.exposeInMainWorld("alipayWorkbench", api);

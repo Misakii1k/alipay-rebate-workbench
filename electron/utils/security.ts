@@ -62,14 +62,14 @@ export function validateMediaFilePath(filePath: string): void {
     throw new Error(`文件不存在：${filePath}`);
   }
 
-  // 检查路径中是否包含危险字符（Windows 命令注入常用字符）
-  const dangerousChars = /[&|^<>;"'`$(){}[\]!]/;
-  if (dangerousChars.test(filePath)) {
-    throw new Error(`安全错误：文件路径包含不安全字符，请重命名文件后重试。路径：${path.basename(filePath)}`);
+  // 检查文件名中是否包含 Windows 文件名非法字符；完整路径里的盘符和分隔符是合法的。
+  const illegalChars = /[<>:"/\\|?*]/;
+  const fileName = path.basename(filePath);
+  if (illegalChars.test(fileName)) {
+    throw new Error(`文件路径包含 Windows 不允许的字符，请重命名文件后重试。路径：${path.basename(filePath)}`);
   }
 
   // 检查文件名长度（防止超长路径攻击）
-  const fileName = path.basename(filePath);
   if (fileName.length > 255) {
     throw new Error("文件名过长，请重命名后重试");
   }

@@ -68,7 +68,7 @@ export function CompareWorkbench({ settings, showToast }: { settings: AppSetting
               <strong>已发评价</strong>
               <span>支持多轮少量粘贴，自动处理多余回车</span>
             </div>
-            <button type="button" onClick={clearReviewed}><Eraser size={16} /> 清空</button>
+            <button type="button" onClick={clearReviewed} title="清空已发评价名单"><Eraser size={16} /> 清空</button>
           </div>
           <textarea
             value={reviewedInput}
@@ -87,14 +87,14 @@ export function CompareWorkbench({ settings, showToast }: { settings: AppSetting
               <strong>已返款</strong>
               <span>可粘贴大量数据，验证后异常会自动置顶标红</span>
             </div>
-            <button type="button" onClick={clearRebated}><Eraser size={16} /> 清空</button>
+            <button type="button" onClick={clearRebated} title="清空已返款名单"><Eraser size={16} /> 清空</button>
           </div>
           <div ref={rightListRef} className="rebate-result-list">
             {verified ? (
               rightList.length ? rightList.map((entry) => {
                 const isProblem = comparison.rightOnly.some((item) => normalizeCompareName(item.name) === normalizeCompareName(entry.name));
                 return (
-                  <button key={`${entry.name}-${entry.source}`} type="button" className={isProblem ? "problem" : ""} onClick={() => copyName(entry.name)}>
+                  <button key={`${entry.name}-${entry.source}`} type="button" className={isProblem ? "problem" : ""} onClick={() => copyName(entry.name)} title="复制这个姓名">
                     <strong>{entry.name}</strong>
                     <span>{isProblem ? "已评价但表单状态未改，请进入微信工作表中修改其状态" : "已通过验证"}</span>
                   </button>
@@ -113,18 +113,18 @@ export function CompareWorkbench({ settings, showToast }: { settings: AppSetting
       </div>
 
       <div className="compare-actions" data-tour="compare-actions">
-        <button className="primary" type="button" onClick={verify}><Play size={18} /> 开始验证</button>
-        {verified && <button className="secondary-action light" type="button" onClick={() => setVerified(false)}>返回编辑</button>}
-        {verified && !dialogOpen && <button className="secondary-action light" type="button" onClick={() => setDialogOpen(true)}>查看需催促名单</button>}
+        <button className="primary" type="button" onClick={verify} title="对比已发评价和已返款名单，找出差异"><Play size={18} /> 开始验证</button>
+        {verified && <button className="secondary-action light" type="button" onClick={() => setVerified(false)} title="返回编辑名单数据">返回编辑</button>}
+        {verified && !dialogOpen && <button className="secondary-action light" type="button" onClick={() => setDialogOpen(true)} title="查看发了评价但没返款的人员名单">查看需催促名单</button>}
       </div>
 
       {dialogOpen && verified && (
         <div className="compare-dialog-backdrop">
           <div className="compare-dialog">
-            <button className="dialog-close" type="button" onClick={() => setDialogOpen(false)}><X size={18} /></button>
+            <button className="dialog-close" type="button" onClick={() => setDialogOpen(false)} title="关闭弹窗"><X size={18} /></button>
             <div className="compare-dialog-tabs">
-              <button type="button" className={dialogTab === "remind" ? "active" : ""} onClick={() => setDialogTab("remind")}>需催促 ({comparison.leftOnly.length})</button>
-              <button type="button" className={dialogTab === "reviewed" ? "active" : ""} onClick={() => setDialogTab("reviewed")}>已评价 ({comparison.matched.length})</button>
+              <button type="button" className={dialogTab === "remind" ? "active" : ""} onClick={() => setDialogTab("remind")} title="查看需催促名单">需催促 ({comparison.leftOnly.length})</button>
+              <button type="button" className={dialogTab === "reviewed" ? "active" : ""} onClick={() => setDialogTab("reviewed")} title="查看已评价名单">已评价 ({comparison.matched.length})</button>
             </div>
             {dialogTab === "remind" ? (
               <>
@@ -132,7 +132,7 @@ export function CompareWorkbench({ settings, showToast }: { settings: AppSetting
                 <p>以下名单来自左侧多出的部分。点击姓名即可复制，方便逐个催促。</p>
                 <div className="copy-name-list">
                   {comparison.leftOnly.length ? comparison.leftOnly.map((entry) => (
-                    <button key={`${entry.name}-${entry.source}`} type="button" onClick={() => copyName(entry.name)}>
+                    <button key={`${entry.name}-${entry.source}`} type="button" onClick={() => copyName(entry.name)} title="复制这个姓名">
                       <ClipboardCopy size={15} /> {entry.name}
                     </button>
                   )) : <div className="empty">没有需要催促的人员。</div>}
@@ -144,7 +144,7 @@ export function CompareWorkbench({ settings, showToast }: { settings: AppSetting
                 <p>以下人员已完成评价且已返款，无需操作。点击姓名即可复制。</p>
                 <div className="copy-name-list">
                   {comparison.matched.length ? comparison.matched.map((entry) => (
-                    <button key={`${entry.name}-${entry.source}`} type="button" onClick={() => copyName(entry.name)}>
+                    <button key={`${entry.name}-${entry.source}`} type="button" onClick={() => copyName(entry.name)} title="复制这个姓名">
                       <ClipboardCopy size={15} /> {entry.name}
                     </button>
                   )) : <div className="empty">没有已评价的人员。</div>}

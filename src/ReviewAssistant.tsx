@@ -638,7 +638,7 @@ export function ReviewAssistant({
             />
 
             {filteredResults.length > visibleCount && (
-              <button className="review-v2-load-more" onClick={loadMoreResults} disabled={loadingMore}>
+              <button className="review-v2-load-more" onClick={loadMoreResults} disabled={loadingMore} title="加载更多搜索结果">
                 {loadingMore ? <Loader2 className="spin" size={16} /> : null}
                 加载更多（剩余 {filteredResults.length - visibleCount} 个）
               </button>
@@ -720,10 +720,10 @@ export function ReviewAssistant({
 }
 
 function ReviewModeTabs({ mode, onModeChange }: { mode: ReviewWorkspaceMode; onModeChange: (mode: ReviewWorkspaceMode) => void }) {
-  const modeOptions: Array<{ key: ReviewWorkspaceMode; label: string; icon: typeof Search }> = [
-    { key: "search", label: "搜索模式", icon: Search },
-    { key: "ai", label: "AI评价", icon: WandSparkles },
-    { key: "mixed", label: "混合模式", icon: Sparkles }
+  const modeOptions: Array<{ key: ReviewWorkspaceMode; label: string; desc: string; icon: typeof Search }> = [
+    { key: "search", label: "搜索模式", desc: "关键词搜索本地图片库，手动选择参考图", icon: Search },
+    { key: "ai", label: "AI评价", desc: "直接输入描述让 AI 生成好评文案，无需选图", icon: WandSparkles },
+    { key: "mixed", label: "混合模式", desc: "搜索图片 + AI 生成文案，左右双栏同时工作", icon: Sparkles }
   ];
   return (
     <div className="review-v2-mode-bar">
@@ -731,7 +731,7 @@ function ReviewModeTabs({ mode, onModeChange }: { mode: ReviewWorkspaceMode; onM
         {modeOptions.map((item) => {
           const Icon = item.icon;
           return (
-            <button key={item.key} type="button" role="tab" aria-selected={mode === item.key} className={clsx(mode === item.key && "active")} onClick={() => onModeChange(item.key)}>
+            <button key={item.key} type="button" role="tab" aria-selected={mode === item.key} className={clsx(mode === item.key && "active")} onClick={() => onModeChange(item.key)} title={item.desc}>
               <Icon size={14} />
               <span>{item.label}</span>
             </button>
@@ -760,7 +760,7 @@ function ModeSelectPage({ mode, onSelect }: { mode: ReviewWorkspaceMode; onSelec
       </div>
       <div className="review-mode-select-cards">
         {(Object.entries(modeConfig) as Array<[ReviewWorkspaceMode, typeof modeConfig.search]>).map(([key, config]) => (
-          <button key={key} className={clsx("review-mode-select-card", mode === key && "active")} onClick={() => onSelect(key)}>
+          <button key={key} className={clsx("review-mode-select-card", mode === key && "active")} onClick={() => onSelect(key)} title="选择收评工作模式">
             <div className="review-mode-card-illustration">
               <config.icon size={48} />
             </div>
@@ -776,7 +776,7 @@ function ModeSelectPage({ mode, onSelect }: { mode: ReviewWorkspaceMode; onSelec
       <div className="review-mode-select-footer">
         <span>默认模式：</span>
         <div className="review-mode-select-footer-dropdown" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }} tabIndex={-1}>
-          <button onClick={() => setOpen(!open)}>
+          <button onClick={() => setOpen(!open)} title="展开或收起模式菜单">
             <current.icon size={16} />
             <span>{current.label}</span>
             <ChevronDown size={14} className={clsx("review-mode-chev", open && "open")} />
@@ -784,7 +784,7 @@ function ModeSelectPage({ mode, onSelect }: { mode: ReviewWorkspaceMode; onSelec
           {open && (
             <div className="review-mode-select-footer-menu">
               {(Object.entries(modeConfig) as Array<[ReviewWorkspaceMode, typeof modeConfig.search]>).map(([key, config]) => (
-                <button key={key} className={clsx(mode === key && "active")} onClick={() => { onSelect(key); setOpen(false); }}>
+                <button key={key} className={clsx(mode === key && "active")} onClick={() => { onSelect(key); setOpen(false); }} title="切换收评工作模式">
                   <config.icon size={14} />
                   <strong>{config.label}</strong>
                   <span>{config.desc}</span>
@@ -828,10 +828,10 @@ function ReviewHero({
           <div className="review-v2-search-input">
             <Search size={20} />
             <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onSearch(); }} placeholder="搜索商品、颜色或型号，例如：彩棉317" />
-            <button className="review-v2-search-btn" onClick={onSearch} disabled={searching}>{searching ? <Loader2 className="spin" size={18} /> : <Search size={16} />}</button>
+            <button className="review-v2-search-btn" onClick={onSearch} disabled={searching} title="在图片库中搜索匹配的参考图">{searching ? <Loader2 className="spin" size={18} /> : <Search size={16} />}</button>
           </div>
           <div className="review-v2-meta-row">
-            <button className="review-v2-root-pill" onClick={onPickRoot}><FolderOpen size={14} /><span>{rootLabel}</span></button>
+            <button className="review-v2-root-pill" onClick={onPickRoot} title="选择图片根目录"><FolderOpen size={14} /><span>{rootLabel}</span></button>
             <button className="review-v2-root-pill ghost" onClick={onRebuildIndex} title="忽略缓存，重新扫描全目录"><Hammer size={14} /><span>重建索引</span></button>
           </div>
         </div>
@@ -844,7 +844,7 @@ function ReviewHero({
               <span className="review-v2-recent-label">搜索收藏</span>
               {favoriteQueries.map((q) => (
                 <span key={q} className="review-v2-memory-chip favorite">
-                  <button onClick={() => onPickRecent(q)}>{q}</button>
+                  <button onClick={() => onPickRecent(q)} title="使用这个搜索词">{q}</button>
                   <button onClick={() => onToggleFavorite(q)} title="取消收藏"><Star size={12} /></button>
                 </span>
               ))}
@@ -857,7 +857,7 @@ function ReviewHero({
                 const starred = favoriteQueries.includes(q);
                 return (
                   <span key={q} className="review-v2-memory-chip">
-                    <button onClick={() => onPickRecent(q)}>{q}</button>
+                    <button onClick={() => onPickRecent(q)} title="使用这个搜索词">{q}</button>
                     <button className={clsx(starred && "starred")} onClick={() => onToggleFavorite(q)} title={starred ? "取消收藏" : "收藏搜索"}>
                       {starred ? <Star size={12} /> : <StarOff size={12} />}
                     </button>
@@ -910,9 +910,9 @@ function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCou
           <option value="name-asc">文件名 A-Z</option>
           <option value="name-desc">文件名 Z-A</option>
         </select>
-        {selectedImages > 0 && (<><span className="review-v2-selected-chip review-v2-selected-chip-readable"><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span><span className="review-v2-drag-hint">拖拽缩略图即可同时移动全部所选</span><button className="review-v2-toolbar-btn" onClick={onClear}>清空选中</button></>)}
-        {selectedImages > 0 && <button className="review-v2-toolbar-btn" onClick={onClear}>取消全选</button>}
-        {totalResults > 0 && <button className="review-v2-toolbar-btn" onClick={onSelectAll}>全选可见</button>}
+        {selectedImages > 0 && (<><span className="review-v2-selected-chip review-v2-selected-chip-readable"><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span><span className="review-v2-drag-hint">拖拽缩略图即可同时移动全部所选</span><button className="review-v2-toolbar-btn" onClick={onClear} title="清空当前内容">清空选中</button></>)}
+        {selectedImages > 0 && <button className="review-v2-toolbar-btn" onClick={onClear} title="清空当前内容">取消全选</button>}
+        {totalResults > 0 && <button className="review-v2-toolbar-btn" onClick={onSelectAll} title="选择当前搜索结果中的全部图片">全选可见</button>}
       </div>
     </div>
   );
@@ -931,7 +931,7 @@ function ReviewResultGrid({ items, selectedKeys, expandedFolders, onToggleExpand
         const isExpanded = isFolder && expandedFolders.has(item.path);
         return (
           <Fragment key={item.path}>
-            <button className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
+            <button className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
               <div className="review-v2-thumb">
                 {item.thumbnailDataUrl ? <img src={item.thumbnailDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
                 {isFolder && item.children && item.children.length > 1 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {item.children.length}</span>}
@@ -948,7 +948,7 @@ function ReviewResultGrid({ items, selectedKeys, expandedFolders, onToggleExpand
             {isExpanded && item.children?.map((child) => {
               const childSelected = selectedKeys.has(child.path);
               return (
-                <button key={child.path} className={clsx("review-v2-card review-v2-child-card", childSelected && "selected")} draggable onClick={() => onToggle(child)} onPointerDown={() => onPreview(child)} onPointerEnter={() => onPointerEnterSelect(child)} onMouseEnter={() => onPreview(child)} onDragStart={(event) => { const paths = dragPathsFor(child); onPreview(child); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }}>
+                <button key={child.path} className={clsx("review-v2-card review-v2-child-card", childSelected && "selected")} draggable onClick={() => onToggle(child)} onPointerDown={() => onPreview(child)} onPointerEnter={() => onPointerEnterSelect(child)} onMouseEnter={() => onPreview(child)} onDragStart={(event) => { const paths = dragPathsFor(child); onPreview(child); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
                   <div className="review-v2-thumb">
                     {child.thumbnailDataUrl ? <img src={child.thumbnailDataUrl} alt={child.name} /> : <ImageIcon size={24} />}
                     {childSelected && <span className="review-v2-check"><Check size={14} /></span>}
@@ -1030,7 +1030,7 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
           {chatUploadedImages.map((url, i) => (
             <div key={i} className="review-v2-chat-thumb">
               <img src={url} alt={`待发送 ${i + 1}`} />
-              <button onClick={() => onRemoveImage(i)}><X size={12} /></button>
+              <button onClick={() => onRemoveImage(i)} title="移除这张已上传图片"><X size={12} /></button>
             </div>
           ))}
         </div>
@@ -1062,12 +1062,12 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
           placeholder={dragOver ? "释放以上传图片" : "输入消息，Enter 发送，Shift+Enter 换行"}
           disabled={chatting}
         />
-        <button className="review-v2-chat-send" onClick={onSend} disabled={chatting || (!chatInput.trim() && !chatUploadedImages.length)}>
+        <button className="review-v2-chat-send" onClick={onSend} disabled={chatting || (!chatInput.trim() && !chatUploadedImages.length)} title="发送当前 AI 对话消息">
           {chatting ? <Loader2 className="spin" size={16} /> : <ArrowUp size={16} />}
         </button>
       </div>
 
-      <button className="review-v2-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}>
+      <button className="review-v2-advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)} title="展开或收起高级设置">
         <ChevronDown size={14} className={clsx("review-v2-chev", advancedOpen && "open")} />
         高级设置（风格、字数、快捷键）
       </button>
@@ -1086,7 +1086,7 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
           <label className="review-v2-desc review-v2-hotkey"><span><Keyboard size={13} /> 生成快捷键</span><input value={hotkey} onChange={(e) => onSaveHotkey(e.target.value)} placeholder="Ctrl+Enter" /></label>
           <label className="review-v2-desc"><span>商品描述补充</span><textarea value={options.productDescription} onChange={(e) => setOptions((p) => ({ ...p, productDescription: e.target.value }))} placeholder="补充商品卖点（可选）" /></label>
           <label className="review-v2-desc"><span>自定义提示词（追加在系统指令后）</span><textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} onBlur={onSaveCustomPrompt} placeholder="例如：多用口语化表达，不要使用书面语" /></label>
-          <button className="review-v2-ghost" onClick={onClearContext}><RotateCcw size={14} /> 清空对话</button>
+          <button className="review-v2-ghost" onClick={onClearContext} title="清空当前内容"><RotateCcw size={14} /> 清空对话</button>
         </div>
       )}
     </section>
@@ -1096,14 +1096,14 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
 function ReviewCopyResultList({ copies, savedCopies, editingIndex, editingText, onSetEditingText, onStartEdit, onSaveEdit, onCancelEdit, onCopy, onCopyAll, onToggleStar, copyListRef }: { copies: string[]; savedCopies: string[]; editingIndex: number | null; editingText: string; onSetEditingText: (v: string) => void; onStartEdit: (index: number) => void; onSaveEdit: () => void; onCancelEdit: () => void; onCopy: (text: string) => void; onCopyAll: () => void; onToggleStar: (text: string) => void; copyListRef: React.RefObject<HTMLDivElement>; }) {
   return (
     <section className="review-v2-copy-section" ref={copyListRef}>
-      <div className="review-v2-copy-head"><strong>已生成 {copies.length} 条文案</strong><span>点击复制 · 编辑改写 · 星标收藏</span><button className="review-v2-copy-all" onClick={onCopyAll}><Copy size={14} /> 复制全部</button></div>
-      <div className="review-v2-copy-list">{copies.map((copy, index) => { const isStarred = savedCopies.includes(copy); const isEditing = editingIndex === index; const charCount = copy.length; return <article key={index + '-' + copy.slice(0, 6)} className="review-v2-copy-card">{!isEditing && <><div className="review-v2-copy-text" onClick={() => onCopy(copy)}><Copy size={14} className="review-v2-copy-icon" /><span>{copy}</span></div><div className="review-v2-copy-meta"><span>{charCount} 字</span><button className="review-v2-copy-action" onClick={() => onStartEdit(index)} title="编辑"><Edit3 size={13} /></button><button className={clsx("review-v2-copy-action", isStarred && "starred")} onClick={() => onToggleStar(copy)} title={isStarred ? "取消收藏" : "收藏"}>{isStarred ? <Star size={13} /> : <StarOff size={13} />}</button></div></>}{isEditing && <div className="review-v2-copy-edit"><textarea value={editingText} onChange={(e) => onSetEditingText(e.target.value)} rows={3} /><div className="review-v2-copy-edit-actions"><button className="review-v2-secondary" onClick={onSaveEdit}>保存</button><button className="review-v2-ghost" onClick={onCancelEdit}>取消</button></div></div>}</article>; })}</div>
+      <div className="review-v2-copy-head"><strong>已生成 {copies.length} 条文案</strong><span>点击复制 · 编辑改写 · 星标收藏</span><button className="review-v2-copy-all" onClick={onCopyAll} title="复制全部生成文案"><Copy size={14} /> 复制全部</button></div>
+      <div className="review-v2-copy-list">{copies.map((copy, index) => { const isStarred = savedCopies.includes(copy); const isEditing = editingIndex === index; const charCount = copy.length; return <article key={index + '-' + copy.slice(0, 6)} className="review-v2-copy-card">{!isEditing && <><div className="review-v2-copy-text" onClick={() => onCopy(copy)}><Copy size={14} className="review-v2-copy-icon" /><span>{copy}</span></div><div className="review-v2-copy-meta"><span>{charCount} 字</span><button className="review-v2-copy-action" onClick={() => onStartEdit(index)} title="编辑"><Edit3 size={13} /></button><button className={clsx("review-v2-copy-action", isStarred && "starred")} onClick={() => onToggleStar(copy)} title={isStarred ? "取消收藏" : "收藏"}>{isStarred ? <Star size={13} /> : <StarOff size={13} />}</button></div></>}{isEditing && <div className="review-v2-copy-edit"><textarea value={editingText} onChange={(e) => onSetEditingText(e.target.value)} rows={3} /><div className="review-v2-copy-edit-actions"><button className="review-v2-secondary" onClick={onSaveEdit} title="保存编辑后的文案">保存</button><button className="review-v2-ghost" onClick={onCancelEdit} title="取消编辑文案">取消</button></div></div>}</article>; })}</div>
     </section>
   );
 }
 
 function ReviewSavedCopies({ savedCopies, open, onToggle, onCopy, onRemove }: { savedCopies: string[]; open: boolean; onToggle: () => void; onCopy: (text: string) => void; onRemove: (text: string) => void; }) {
-  return <section className={clsx("review-v2-saved", open && "open")}><button className="review-v2-saved-toggle" onClick={onToggle}><Star size={14} /><strong>我的收藏文案（{savedCopies.length}）</strong><ChevronDown size={14} className={clsx("review-v2-chev", open && "open")} /></button>{open && <div className="review-v2-saved-list">{savedCopies.map((text, i) => <article key={i + '-' + text.slice(0, 6)} className="review-v2-saved-card"><span onClick={() => onCopy(text)}>{text}</span><button className="review-v2-copy-action" onClick={() => onRemove(text)} title="删除"><Trash2 size={13} /></button></article>)}</div>}</section>;
+  return <section className={clsx("review-v2-saved", open && "open")}><button className="review-v2-saved-toggle" onClick={onToggle} title="展开或收起收藏文案"><Star size={14} /><strong>我的收藏文案（{savedCopies.length}）</strong><ChevronDown size={14} className={clsx("review-v2-chev", open && "open")} /></button>{open && <div className="review-v2-saved-list">{savedCopies.map((text, i) => <article key={i + '-' + text.slice(0, 6)} className="review-v2-saved-card"><span onClick={() => onCopy(text)}>{text}</span><button className="review-v2-copy-action" onClick={() => onRemove(text)} title="删除"><Trash2 size={13} /></button></article>)}</div>}</section>;
 }
 
 function SliderCompact({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {

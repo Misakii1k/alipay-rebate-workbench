@@ -3,6 +3,7 @@ import type {
   TitleAnalysisResult,
   TitleCandidate,
   TitleCandidateMode,
+  TitleGenerationStrategy,
   TitleGenerationDiagnostics,
   TitleKeywordData,
   TitleKeywordEntry,
@@ -29,6 +30,20 @@ const THIRD_PARTY_BRANDS = [
   "森马",
   "美特斯邦威",
   "太平鸟",
+  "安踏",
+  "李宁",
+  "特步",
+  "361",
+  "班尼路",
+  "龙牙",
+  "美拉德",
+  "增致",
+  "官方旗舰店",
+  "旗舰店",
+  "专柜",
+  "大牌",
+  "品牌",
+  "国际一线",
   "gxg",
   "fila",
   "nike",
@@ -73,7 +88,9 @@ const EXAMPLE_STYLE_BLUEPRINTS = [
 const MODE_LABEL: Record<TitleCandidateMode, string> = {
   traffic: "流量型",
   precise: "精准型",
-  "blue-ocean": "蓝海型"
+  category: "类目大词",
+  "blue-ocean": "蓝海型",
+  legacy: "旧版对照"
 };
 
 const BEAM_WIDTH = 34;
@@ -213,7 +230,18 @@ export function parseTitleProduct(productName: string): TitleProductProfile {
   };
 }
 
-export function generateTitleScore(data: TitleKeywordData, productName: string, categoryName?: string, variantCount = 3, extraKeywords?: string[]): TitleScoreResult {
+export function generateTitleScore(
+  data: TitleKeywordData,
+  productName: string,
+  categoryName?: string,
+  variantCount = 3,
+  extraKeywords?: string[],
+  strategy: TitleGenerationStrategy = "legacy",
+  targetKeywords?: string[]
+): TitleScoreResult {
+  if (strategy === "stacked-v2") {
+    return generateStackedTitleScore(data, productName, categoryName, variantCount, extraKeywords, targetKeywords);
+  }
   const startedAt = Date.now();
   const product = parseTitleProduct(productName);
   const diagnostics: TitleGenerationDiagnostics = { poolSize: 0, recalledSize: 0, generatedCount: 0, elapsedMs: 0, exactFitCount: 0 };
@@ -257,7 +285,13 @@ export function generateTitleScore(data: TitleKeywordData, productName: string, 
   };
 }
 
-export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzePayload, extraKeywords?: string[]): TitleAnalysisResult {
+export function analyzeTitleScore(
+  data: TitleKeywordData,
+  payload: TitleAnalyzePayload,
+  extraKeywords?: string[],
+  strategy: TitleGenerationStrategy = payload.strategy ?? "legacy",
+  targetKeywords?: string[]
+): TitleAnalysisResult {
   const startedAt = Date.now();
   const title = normalizeSubmittedTitle(payload.title);
   const product = parseTitleProduct(payload.productName || title);
@@ -299,13 +333,15 @@ export function analyzeTitleScore(data: TitleKeywordData, payload: TitleAnalyzeP
   const recommendations = buildAnalysisRecommendations(title, product, ruleChecks, keywordHits, category?.name, context);
   const endingAdvice = buildEndingAdvice(title, product);
 
-  const rawSuggested = generateWorkingCandidates(poolResult.options, context);
-  const suggestedTitles = rawSuggested
-    .map((c, i) => toTitleCandidate(c, product, data, category?.name, i, context))
-    .filter((c): c is TitleCandidate => c !== null)
-    .filter((c) => c.title !== title)
-    .sort((a, b) => b.score - a.score);
-  const uniqueSuggested = dedupeCandidates(suggestedTitles).slice(0, 5);
+  const uniqueSuggested = strategy === "stacked-v2"
+    ? generateStackedTitleScore(data, payload.productName || title, payload.categoryName, 5, extraKeywords, targetKeywords ?? payload.targetKeywords).candidates.filter((c) => c.title !== title).slice(0, 5)
+    : dedupeCandidates(
+        generateWorkingCandidates(poolResult.options, context)
+          .map((c, i) => toTitleCandidate(c, product, data, category?.name, i, context))
+          .filter((c): c is TitleCandidate => c !== null)
+          .filter((c) => c.title !== title)
+          .sort((a, b) => b.score - a.score)
+      ).slice(0, 5);
 
   diagnostics.generatedCount = 1 + uniqueSuggested.length;
   diagnostics.elapsedMs = Date.now() - startedAt;
@@ -812,6 +848,643 @@ function toTitleCandidate(
     recommendations: [],
     suggestions
   };
+}
+
+type StackedTermSource = TitleKeywordEntry["source"] | "manual" | "derived" | "rule";
+
+interface StackedTermOption {
+  text: string;
+  weight: number;
+  source: StackedTermSource;
+  parent?: string;
+  rank?: number;
+  category?: string;
+  priority?: number;
+}
+
+interface StackedDraft {
+  mode: TitleCandidateMode;
+  tokens: StackedTermOption[];
+}
+
+const NATURAL_TERM_DICTIONARY = [
+  "天丝莱赛尔",
+  "莱赛尔",
+  "裤子男款",
+  "男士裤子",
+  "休闲裤",
+  "直筒裤",
+  "运动裤",
+  "牛仔裤",
+  "工装裤",
+  "五分裤",
+  "短裤男",
+  "男裤",
+  "男款",
+  "男士",
+  "裤子",
+  "卫裤",
+  "短裤",
+  "长裤",
+  "西裤",
+  "夏季薄款",
+  "夏薄款",
+  "春夏薄款",
+  "春秋薄款",
+  "2026新款",
+  "夏季",
+  "春季",
+  "秋季",
+  "冬季",
+  "春秋",
+  "春夏",
+  "秋冬",
+  "棉麻",
+  "亚麻",
+  "纯棉",
+  "彩棉",
+  "冰丝",
+  "速干",
+  "尼龙",
+  "天丝",
+  "薄款",
+  "凉感",
+  "垂感",
+  "透气",
+  "宽松",
+  "阔腿",
+  "束脚",
+  "弯刀",
+  "香蕉",
+  "新款",
+  "高级感",
+  "潮牌",
+  "青少年",
+  "爸爸",
+  "中老年"
+].sort((a, b) => b.length - a.length);
+
+const MATERIAL_TERMS = ["天丝莱赛尔", "莱赛尔", "棉麻", "亚麻", "纯棉", "彩棉", "冰丝", "速干", "尼龙", "天丝"];
+const STYLE_CONTEXT_TERMS = ["高级感", "潮牌", "青少年", "初中生", "高中", "学生", "爸爸", "中老年", "老年", "轻奢", "痞帅", "商务", "干活", "跑步专用", "跑步"];
+const PROTECTED_DUPLICATE_TERMS = [
+  "天丝莱赛尔",
+  "裤子男款",
+  "男士裤子",
+  "休闲裤",
+  "直筒裤",
+  "运动裤",
+  "五分裤",
+  "短裤男",
+  "男裤",
+  "男款",
+  "男士",
+  "裤子",
+  "夏季",
+  "春季",
+  "秋季",
+  "冬季",
+  "春秋",
+  "春夏",
+  "秋冬",
+  "棉麻",
+  "亚麻",
+  "纯棉",
+  "彩棉",
+  "冰丝",
+  "速干",
+  "薄款",
+  "凉感",
+  "新款",
+  "2026新款"
+].sort((a, b) => b.length - a.length);
+
+function generateStackedTitleScore(
+  data: TitleKeywordData,
+  productName: string,
+  categoryName?: string,
+  variantCount = 5,
+  extraKeywords?: string[],
+  targetKeywords?: string[]
+): TitleScoreResult {
+  const startedAt = Date.now();
+  const product = parseTitleProduct(productName);
+  const diagnostics: TitleGenerationDiagnostics = { poolSize: 0, recalledSize: 0, generatedCount: 0, elapsedMs: 0, exactFitCount: 0, strictRejectedCount: 0, legacyCandidateCount: 0 };
+  if (!productName.trim()) {
+    diagnostics.elapsedMs = Date.now() - startedAt;
+    return { ok: false, message: "请先输入商品名。", product, candidates: [], warnings: data.warnings, diagnostics };
+  }
+
+  const category = selectCategory(data, product, categoryName);
+  const context = createGenerationContext(data, product, category?.name, categoryName, diagnostics);
+  const targets = parseStackedTargets([...(targetKeywords ?? []), ...(extraKeywords ?? [])], product);
+  const pool = buildStackedTermPool(context, targets);
+  diagnostics.poolSize = context.scoreEntries.length;
+  diagnostics.recalledSize = pool.length;
+
+  const drafts = buildStackedDrafts(pool, targets, product);
+  const strictCandidates: TitleCandidate[] = [];
+  for (const draft of drafts) {
+    const fitted = fitStackedDraftToExact(draft, pool, targets, product);
+    if (!fitted) {
+      diagnostics.strictRejectedCount = (diagnostics.strictRejectedCount ?? 0) + 1;
+      continue;
+    }
+    const candidate = toStackedCandidate(fitted, product, data, category?.name, strictCandidates.length, context, targets);
+    if (!candidate) {
+      diagnostics.strictRejectedCount = (diagnostics.strictRejectedCount ?? 0) + 1;
+      continue;
+    }
+    strictCandidates.push(candidate);
+  }
+
+  const unique = dedupeCandidates(strictCandidates)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(variantCount, 4));
+
+  const legacy = generateTitleScore(data, productName, categoryName, 1, extraKeywords, "legacy").candidates[0];
+  if (legacy) {
+    diagnostics.legacyCandidateCount = 1;
+    const legacyStrict = validateStackedHardRules(legacy.title, legacy.tokens, product).length === 0;
+    if (legacyStrict && !unique.some((candidate) => candidate.title === legacy.title)) {
+      unique.push({
+        ...legacy,
+        id: `legacy-${legacy.id}`,
+        mode: "legacy",
+        label: MODE_LABEL.legacy,
+        strategy: "legacy",
+        strictPass: true,
+        suggestions: [...legacy.suggestions, "旧版算法生成，已通过实验版硬规则过滤。"]
+      });
+    }
+  }
+
+  diagnostics.generatedCount = unique.length;
+  diagnostics.exactFitCount = unique.filter((candidate) => candidate.totalBytes === TITLE_TOTAL_TARGET_BYTES).length;
+  diagnostics.elapsedMs = Date.now() - startedAt;
+
+  return {
+    ok: unique.length > 0,
+    message: unique.length ? "已生成叠词实验版候选，所有展示标题均通过硬规则。" : "实验版未拼出合格 60 字节标题，请减少冲突目标词或补充更明确的商品属性。",
+    product,
+    selectedCategory: category?.name,
+    candidates: unique,
+    warnings: [
+      ...data.warnings,
+      ...(legacy && !unique.some((candidate) => candidate.mode === "legacy") ? ["旧版对照未通过实验版硬规则，已按要求隐藏。"] : []),
+      ...(unique.length ? [] : ["硬规则：帛先生开头、整条 60 字节、裤子类必须含裤子、不得重复核心词、不得出现冲突季节/材质/品牌词。"])
+    ],
+    diagnostics
+  };
+}
+
+function parseStackedTargets(values: string[], product: TitleProductProfile): string[] {
+  const rawParts = values
+    .flatMap((value) => String(value ?? "").split(/[\s,，、;；\n\r]+/))
+    .map(sanitizeTitleKeyword)
+    .filter((word) => word.length >= 2 && !containsThirdPartyBrand(word));
+  const result: string[] = [];
+  const add = (word: string) => {
+    const cleaned = sanitizeTitleKeyword(word);
+    if (cleaned.length >= 2 && !containsThirdPartyBrand(cleaned)) result.push(cleaned);
+  };
+
+  for (const part of rawParts) {
+    add(part);
+    for (const term of extractNaturalTerms(part)) add(term);
+  }
+
+  if (!result.length) {
+    if (product.series) add(product.series);
+    if (product.season) add(product.season);
+    for (const material of product.materials) add(material);
+    for (const feature of product.features) add(feature);
+  }
+
+  if (product.category === "long-pants") {
+    add("休闲裤");
+    add("直筒裤");
+    add("卫裤");
+    add("运动裤");
+  } else if (product.category === "shorts") {
+    add("短裤男");
+    add("五分裤");
+    add("直筒裤");
+  }
+  if (product.category === "pants" || product.category === "long-pants" || product.category === "shorts") add("裤子");
+
+  return dedupeTextTokens(result).slice(0, 28);
+}
+
+function extractNaturalTerms(value: string): string[] {
+  const text = sanitizeTitleKeyword(value);
+  const terms: Array<{ term: string; index: number }> = [];
+  const add = (term: string) => {
+    const index = text.indexOf(term);
+    if (index >= 0) terms.push({ term, index });
+  };
+  for (const term of NATURAL_TERM_DICTIONARY) add(term);
+  if (/男士.*裤子/.test(text)) terms.push({ term: "男士裤子", index: text.indexOf("男士") });
+  if (/裤子.*男款/.test(text)) terms.push({ term: "裤子男款", index: text.indexOf("裤子") });
+  if (/夏.*薄款/.test(text) && !text.includes("夏季薄款")) terms.push({ term: "夏季薄款", index: Math.max(0, text.indexOf("夏")) });
+  return dedupeTextTokens(
+    terms
+      .sort((a, b) => a.index - b.index || b.term.length - a.term.length)
+      .map((item) => item.term)
+  );
+}
+
+function buildStackedTermPool(context: GenerationContext, targets: string[]): StackedTermOption[] {
+  const options: StackedTermOption[] = [];
+  const targetText = targets.join("");
+  const push = (option: StackedTermOption) => {
+    const text = sanitizeTitleKeyword(option.text);
+    if (!text || getGBKByteLength(text) > TITLE_BODY_TARGET_BYTES || containsThirdPartyBrand(text)) return;
+    if (!isStackedTermTruthful(text, context.product, targetText)) return;
+    options.push({ ...option, text });
+  };
+
+  targets.forEach((target, index) => push({ text: target, weight: 1200 - index * 35, source: "manual", priority: Math.max(0, 80 - index) }));
+  for (const word of requiredWordsForProduct(context.product)) push({ text: word, weight: 900, source: "rule", priority: 70 });
+  for (const word of priorityWordsForProduct(context.product)) push({ text: word, weight: 720, source: "rule", priority: 55 });
+
+  for (const entry of context.scoreEntries.slice(0, 520)) {
+    const keyword = sanitizeTitleKeyword(entry.keyword);
+    if (!keyword || !isStackedEntryAllowed(entry, context.product, targetText, context.selectedCategory)) continue;
+    const baseWeight = entryRelevanceScore(entry, context.product, context.selectedCategory) + stackedRankBonus(entry.rank);
+    if (getGBKByteLength(keyword) <= 28) {
+      push({ text: keyword, weight: baseWeight, source: entry.source, parent: entry.keyword, rank: entry.rank, category: entry.category });
+    }
+    for (const phrase of extractStackedPhrases(keyword)) {
+      push({
+        text: phrase,
+        weight: baseWeight * 0.86 + stackedTargetBonus(phrase, targets),
+        source: "derived",
+        parent: entry.keyword,
+        rank: entry.rank,
+        category: entry.category
+      });
+    }
+  }
+
+  return dedupeStackedTerms(options)
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || b.weight - a.weight || getGBKByteLength(b.text) - getGBKByteLength(a.text))
+    .slice(0, 180);
+}
+
+function extractStackedPhrases(keyword: string): string[] {
+  const phrases = new Set<string>();
+  const natural = extractNaturalTerms(keyword);
+  for (const term of natural) phrases.add(term);
+  const materials = natural.filter((term) => MATERIAL_TERMS.includes(term));
+  const categories = natural.filter((term) => /男裤|裤子男款|男士裤子|休闲裤|直筒裤|卫裤|运动裤|短裤男|五分裤|短裤/.test(term));
+  for (const material of materials) {
+    for (const category of categories) {
+      const joined = `${material}${category}`;
+      if (keyword.includes(joined)) phrases.add(joined);
+    }
+  }
+  for (const season of ["夏季", "春季", "秋季", "冬季", "春秋", "春夏"]) {
+    if (keyword.includes(`${season}薄款`)) phrases.add(`${season}薄款`);
+  }
+  return [...phrases].filter((phrase) => phrase.length >= 2 && phrase.length <= 10);
+}
+
+function isStackedEntryAllowed(entry: TitleKeywordEntry, product: TitleProductProfile, targetText: string, selectedCategory?: string) {
+  const keyword = sanitizeTitleKeyword(entry.keyword);
+  if (!isStackedTermTruthful(keyword, product, targetText)) return false;
+  if (product.category === "long-pants" && /短裤|五分裤|内裤|短袖|背心|卫衣男/.test(keyword)) return false;
+  if (product.category === "shorts" && /长裤|牛仔裤|西裤|卫裤|短袖|背心/.test(keyword)) return false;
+  if (selectedCategory && entry.category === selectedCategory) return true;
+  if (keywordFitsProduct(keyword, product)) return true;
+  return targetsOverlapKeyword(targetText, keyword);
+}
+
+function isStackedTermTruthful(term: string, product: TitleProductProfile, targetText: string) {
+  const text = normalizeTitleText(term);
+  if (!text || containsThirdPartyBrand(text)) return false;
+  if (/(官方|旗舰|专柜|品牌|大牌)/.test(text)) return false;
+  if (hasSeasonConflict(text, product, targetText)) return false;
+  if (hasMaterialConflict(text, product, targetText)) return false;
+  if (STYLE_CONTEXT_TERMS.some((word) => text.includes(normalizeTitleText(word)) && !targetText.includes(word) && !product.normalizedName.includes(normalizeTitleText(word)))) return false;
+  return true;
+}
+
+function targetsOverlapKeyword(targetText: string, keyword: string) {
+  const cleanTarget = normalizeTitleText(targetText);
+  const cleanKeyword = normalizeTitleText(keyword);
+  return cleanTarget.length >= 2 && (cleanTarget.includes(cleanKeyword) || cleanKeyword.includes(cleanTarget) || coverage(cleanKeyword, cleanTarget) >= 0.65);
+}
+
+function hasSeasonConflict(text: string, product: TitleProductProfile, targetText: string) {
+  const allowed = seasonCharsFrom(`${product.season}${targetText}`);
+  if (!allowed.size) return false;
+  const used = seasonCharsFrom(text);
+  for (const ch of used) if (!allowed.has(ch)) return true;
+  if (allowed.has("夏") && /春款|春装|春秋|秋冬|冬季|秋季/.test(text) && !targetText.includes("春秋") && !targetText.includes("秋冬")) return true;
+  return false;
+}
+
+function seasonCharsFrom(text: string) {
+  const set = new Set<string>();
+  for (const ch of SEASON_CHARS) if (text.includes(ch)) set.add(ch);
+  return set;
+}
+
+function hasMaterialConflict(text: string, product: TitleProductProfile, targetText: string) {
+  const allowed = new Set<string>([...product.materials, ...MATERIAL_TERMS.filter((term) => targetText.includes(term))]);
+  if (product.normalizedName.includes("彩棉")) ["彩棉", "棉麻", "亚麻", "纯棉"].forEach((word) => allowed.add(word));
+  if (!allowed.size) return false;
+  return MATERIAL_TERMS.some((material) => text.includes(normalizeTitleText(material)) && !allowed.has(material));
+}
+
+function stackedRankBonus(rank?: number) {
+  if (!rank) return 0;
+  return Math.max(0, 120 - rank);
+}
+
+function stackedTargetBonus(text: string, targets: string[]) {
+  const clean = normalizeTitleText(text);
+  return targets.reduce((sum, target, index) => {
+    const t = normalizeTitleText(target);
+    if (clean.includes(t) || t.includes(clean)) return sum + Math.max(20, 120 - index * 8);
+    return sum;
+  }, 0);
+}
+
+function dedupeStackedTerms(options: StackedTermOption[]) {
+  const map = new Map<string, StackedTermOption>();
+  for (const option of options) {
+    const key = normalizeTitleText(option.text);
+    const existing = map.get(key);
+    if (!existing || option.weight > existing.weight || (option.priority ?? 0) > (existing.priority ?? 0)) map.set(key, option);
+  }
+  return [...map.values()];
+}
+
+function buildStackedDrafts(pool: StackedTermOption[], targets: string[], product: TitleProductProfile): StackedDraft[] {
+  const bestForTargets = targets.slice(0, 8).map((target) => bestTermForTarget(target, pool)).filter((term): term is StackedTermOption => Boolean(term));
+  const categoryWords = stackedCategoryWords(product)
+    .map((word) => pool.find((term) => normalizeTitleText(term.text) === normalizeTitleText(word)) ?? { text: word, weight: 680, source: "rule" as const, priority: 60 })
+    .filter((term) => isStackedTermTruthful(term.text, product, targets.join("")));
+  const topExcel = pool.filter((term) => term.source === "market" || term.source === "breakdown" || term.source === "derived").slice(0, 36);
+  const topBlue = pool.filter((term) => term.source === "blue-ocean").slice(0, 18);
+  const manual = pool.filter((term) => term.source === "manual").slice(0, 16);
+  const modes: Array<{ mode: TitleCandidateMode; terms: StackedTermOption[] }> = [
+    { mode: "traffic", terms: [...bestForTargets, ...topExcel, ...categoryWords, ...manual] },
+    { mode: "precise", terms: [...manual, ...bestForTargets, ...categoryWords, ...topExcel] },
+    { mode: "category", terms: [...bestForTargets, ...categoryWords, ...topExcel, ...manual] },
+    { mode: "blue-ocean", terms: [...bestForTargets, ...categoryWords, ...topBlue, ...topExcel] }
+  ];
+  const drafts: StackedDraft[] = [];
+  for (const mode of modes) {
+    drafts.push({ mode: mode.mode, tokens: mode.terms });
+    drafts.push({ mode: mode.mode, tokens: [...mode.terms.slice(0, 5), ...mode.terms.slice(8, 24), ...mode.terms.slice(5, 8)] });
+    drafts.push({ mode: mode.mode, tokens: [...mode.terms.filter((term) => getGBKByteLength(term.text) >= 8).slice(0, 12), ...mode.terms] });
+  }
+  return drafts;
+}
+
+function bestTermForTarget(target: string, pool: StackedTermOption[]) {
+  const cleanTarget = normalizeTitleText(target);
+  return pool
+    .filter((term) => {
+      const clean = normalizeTitleText(term.text);
+      return clean.includes(cleanTarget) || cleanTarget.includes(clean) || areTargetAlternatives(cleanTarget, clean);
+    })
+    .sort((a, b) => b.weight - a.weight || getGBKByteLength(b.text) - getGBKByteLength(a.text))[0];
+}
+
+function areTargetAlternatives(target: string, term: string) {
+  if (/男士裤子/.test(target) && /男裤|裤子男款/.test(term)) return true;
+  if (/男裤|裤子男款/.test(target) && /男士裤子/.test(term)) return true;
+  if (target.includes("天丝莱赛尔") && term.includes("天丝莱赛尔") && /男裤|裤子男款|男士裤子/.test(term)) return true;
+  if (target.includes("夏薄款") && term.includes("夏季薄款")) return true;
+  return false;
+}
+
+function stackedCategoryWords(product: TitleProductProfile) {
+  if (product.category === "long-pants") return ["休闲裤", "直筒裤", "卫裤", "运动裤", "裤子男款", "男裤"];
+  if (product.category === "shorts") return ["短裤男", "五分裤", "直筒裤", "运动裤", "裤子男款", "男裤"];
+  if (product.category === "pants") return ["裤子男款", "男裤", "休闲裤", "直筒裤"];
+  return [];
+}
+
+function fitStackedDraftToExact(draft: StackedDraft, pool: StackedTermOption[], targets: string[], product: TitleProductProfile): StackedDraft | null {
+  let tokens: StackedTermOption[] = [];
+  const targetText = targets.join("");
+  const tryAdd = (option: StackedTermOption) => {
+    const text = sanitizeTitleKeyword(option.text);
+    if (!text || !isStackedTermTruthful(text, product, targetText)) return false;
+    if (tokens.some((token) => normalizeTitleText(token.text) === normalizeTitleText(text))) return false;
+    const next = [...tokens, { ...option, text }];
+    const body = next.map((token) => token.text).join("");
+    if (getGBKByteLength(body) > TITLE_BODY_TARGET_BYTES) return false;
+    if (validateStackedHardRules(TITLE_PREFIX + body, next.map((token) => token.text), product, false, targetText).length) return false;
+    tokens = next;
+    return true;
+  };
+
+  for (const option of draft.tokens) tryAdd(option);
+  tokens = expandStackedTokens(tokens, pool, product, targetText);
+  const filled = fillStackedTokens(tokens, pool, product, targetText);
+  if (!filled) return null;
+  return { mode: draft.mode, tokens: filled };
+}
+
+function expandStackedTokens(tokens: StackedTermOption[], pool: StackedTermOption[], product: TitleProductProfile, targetText: string) {
+  let next = [...tokens];
+  let improved = true;
+  while (improved) {
+    improved = false;
+    const currentBytes = getGBKByteLength(next.map((token) => token.text).join(""));
+    const gap = TITLE_BODY_TARGET_BYTES - currentBytes;
+    if (gap <= 0) break;
+    for (let index = 0; index < next.length; index += 1) {
+      const token = next[index];
+      const expansions = pool
+        .filter((option) => normalizeTitleText(option.text).includes(normalizeTitleText(token.text)) && normalizeTitleText(option.text) !== normalizeTitleText(token.text))
+        .filter((option) => !option.rank || !token.rank || option.rank - token.rank <= 30)
+        .filter((option) => getGBKByteLength(option.text) - getGBKByteLength(token.text) > 0 && getGBKByteLength(option.text) - getGBKByteLength(token.text) <= gap)
+        .sort((a, b) => b.weight - a.weight);
+      for (const expansion of expansions) {
+        const candidate = [...next];
+        candidate[index] = expansion;
+        const body = candidate.map((item) => item.text).join("");
+        if (getGBKByteLength(body) > TITLE_BODY_TARGET_BYTES) continue;
+        if (validateStackedHardRules(TITLE_PREFIX + body, candidate.map((item) => item.text), product, false, targetText).length) continue;
+        if (!isStackedTermTruthful(expansion.text, product, targetText)) continue;
+        next = candidate;
+        improved = true;
+        break;
+      }
+      if (improved) break;
+    }
+  }
+  return next;
+}
+
+function fillStackedTokens(tokens: StackedTermOption[], pool: StackedTermOption[], product: TitleProductProfile, targetText: string): StackedTermOption[] | null {
+  const start = [...tokens];
+  const startBody = start.map((token) => token.text).join("");
+  if (getGBKByteLength(startBody) === TITLE_BODY_TARGET_BYTES) return start;
+  if (getGBKByteLength(startBody) > TITLE_BODY_TARGET_BYTES) return null;
+  const additions = pool
+    .filter((option) => !start.some((token) => normalizeTitleText(token.text) === normalizeTitleText(option.text)))
+    .filter((option) => isStackedTermTruthful(option.text, product, targetText))
+    .filter((option) => !STYLE_CONTEXT_TERMS.some((word) => option.text.includes(word) && !targetText.includes(word)))
+    .sort((a, b) => safeFillScore(b, targetText) - safeFillScore(a, targetText))
+    .slice(0, 70);
+  const dp = new Map<number, StackedTermOption[][]>();
+  dp.set(getGBKByteLength(startBody), [start]);
+
+  for (const addition of additions) {
+    const additionBytes = getGBKByteLength(addition.text);
+    const snapshot = [...dp.entries()];
+    for (const [bytes, states] of snapshot) {
+      const nextBytes = bytes + additionBytes;
+      if (nextBytes > TITLE_BODY_TARGET_BYTES) continue;
+      for (const state of states) {
+        if (state.some((token) => normalizeTitleText(token.text) === normalizeTitleText(addition.text))) continue;
+        const candidate = [...state, addition];
+        const body = candidate.map((token) => token.text).join("");
+        if (validateStackedHardRules(TITLE_PREFIX + body, candidate.map((token) => token.text), product, false, targetText).length) continue;
+        const bucket = dp.get(nextBytes) ?? [];
+        bucket.push(candidate);
+        bucket.sort((a, b) => scoreStackedTokenList(b, targetText) - scoreStackedTokenList(a, targetText));
+        dp.set(nextBytes, bucket.slice(0, 8));
+      }
+    }
+  }
+
+  const exact = dp.get(TITLE_BODY_TARGET_BYTES) ?? [];
+  return exact.sort((a, b) => scoreStackedTokenList(b, targetText) - scoreStackedTokenList(a, targetText))[0] ?? null;
+}
+
+function safeFillScore(option: StackedTermOption, targetText: string) {
+  let score = option.weight;
+  if (targetText.includes(option.text)) score += 220;
+  if (/2026新款|新款/.test(option.text)) score -= 45;
+  if (option.source === "blue-ocean") score -= 20;
+  return score;
+}
+
+function scoreStackedTokenList(tokens: StackedTermOption[], targetText: string) {
+  const body = tokens.map((token) => token.text).join("");
+  return tokens.reduce((sum, token) => sum + safeFillScore(token, targetText), 0) + getGBKByteLength(body) * 3;
+}
+
+function toStackedCandidate(
+  draft: StackedDraft,
+  product: TitleProductProfile,
+  data: TitleKeywordData,
+  selectedCategory: string | undefined,
+  index: number,
+  context: GenerationContext,
+  targets: string[]
+): TitleCandidate | null {
+  const tokens = draft.tokens.map((token) => token.text);
+  const body = tokens.join("");
+  const title = TITLE_PREFIX + body;
+  const hardErrors = validateStackedHardRules(title, tokens, product, true, targets.join(""));
+  if (hardErrors.length) return null;
+  const keywordHits = detectKeywordHits(title, data, context.scoreEntries).filter((hit) => hit.matchType === "exact").slice(0, 24);
+  const substringHits = scanSubstringHits(title, context.keywordIndex).slice(0, 30);
+  const targetHits = buildTargetHits(title, draft.tokens, targets);
+  const unplacedTerms = targets.slice(0, 10).filter((target) => !targetHits.some((hit) => hit.target === target));
+  const score = scoreStackedCandidate(title, keywordHits, targetHits, unplacedTerms, product);
+  const ruleChecks = evaluateTitleRules(title, product).map((rule) => rule.key === "no-duplicate" ? { ...rule, required: true, passed: hardErrors.length === 0 } : rule);
+  return {
+    id: `stacked-${draft.mode}-${index}-${Math.abs(hashText(title))}`,
+    mode: draft.mode,
+    label: MODE_LABEL[draft.mode],
+    title,
+    body,
+    bodyBytes: getGBKByteLength(body),
+    totalBytes: getGBKByteLength(title),
+    score,
+    tokens,
+    ruleChecks,
+    keywordHits,
+    substringHits,
+    recommendations: [],
+    suggestions: [
+      `硬规则通过：帛先生开头，整条 ${getGBKByteLength(title)}/60 字节，未发现核心重复词。`,
+      `目标词命中 ${targetHits.length}/${Math.min(targets.length, 10)} 个${selectedCategory ? `，主类目：${selectedCategory}` : ""}。`,
+      unplacedTerms.length ? `未放入：${unplacedTerms.join("、")}` : "前置目标词均已覆盖。"
+    ],
+    strategy: "stacked-v2",
+    strictPass: true,
+    targetHits,
+    sourceTerms: draft.tokens.map((token) => ({ text: token.text, source: token.source, parent: token.parent, rank: token.rank, category: token.category })),
+    blockedTerms: hardErrors,
+    unplacedTerms
+  };
+}
+
+function validateStackedHardRules(title: string, tokens: string[], product: TitleProductProfile, final = true, truthText = ""): string[] {
+  const errors: string[] = [];
+  const body = stripPrefix(title);
+  if (!title.startsWith(TITLE_PREFIX)) errors.push("缺少帛先生前缀");
+  if (final && getGBKByteLength(title) !== TITLE_TOTAL_TARGET_BYTES) errors.push(`整条标题不是 60 字节（当前 ${getGBKByteLength(title)}）`);
+  if (final && getGBKByteLength(body) !== TITLE_BODY_TARGET_BYTES) errors.push(`标题主体不是 54 字节（当前 ${getGBKByteLength(body)}）`);
+  if ((product.category === "pants" || product.category === "long-pants" || product.category === "shorts") && !normalizeTitleText(title).includes("裤子")) errors.push("裤子类标题必须包含裤子");
+  if (containsThirdPartyBrand(title)) errors.push("包含第三方品牌或品牌店词");
+  if (/(休闲裤子|直筒裤子)/.test(title)) errors.push("休闲裤/直筒裤必须单独出现，不能变成休闲裤子或直筒裤子");
+  const repeats = repeatedProtectedTerms(title);
+  if (repeats.length) errors.push(`重复核心词：${repeats.join("、")}`);
+  if (/(短裤.*长裤|长裤.*短裤|春款|春装|秋冬|冬季|秋季)/.test(title) && product.season.includes("夏")) errors.push("包含冲突季节或长短裤冲突");
+  if (tokens.some((token) => !isStackedTermTruthful(token, product, truthText || tokens.join("")))) errors.push("包含与商品事实不匹配的词");
+  return errors;
+}
+
+function repeatedProtectedTerms(title: string) {
+  const clean = normalizeTitleText(title);
+  const repeats: string[] = [];
+  for (const term of PROTECTED_DUPLICATE_TERMS) {
+    const key = normalizeTitleText(term);
+    let count = 0;
+    let cursor = 0;
+    while (key && clean.indexOf(key, cursor) >= 0) {
+      const found = clean.indexOf(key, cursor);
+      count += 1;
+      cursor = found + key.length;
+    }
+    if (count > 1) repeats.push(term);
+  }
+  return repeats;
+}
+
+function buildTargetHits(title: string, tokens: StackedTermOption[], targets: string[]) {
+  const cleanTitle = normalizeTitleText(title);
+  const hits: NonNullable<TitleCandidate["targetHits"]> = [];
+  for (const target of targets.slice(0, 10)) {
+    const cleanTarget = normalizeTitleText(target);
+    if (cleanTitle.includes(cleanTarget)) {
+      hits.push({ target, matched: target, kind: "exact", source: "manual" });
+      continue;
+    }
+    const matched = tokens.find((token) => areTargetAlternatives(cleanTarget, normalizeTitleText(token.text)) || cleanTarget.includes(normalizeTitleText(token.text)));
+    if (matched) {
+      hits.push({
+        target,
+        matched: matched.text,
+        kind: matched.source === "derived" ? "expanded" : "replacement",
+        source: matched.source === "manual" ? "manual" : "excel",
+        rank: matched.rank,
+        category: matched.category
+      });
+    }
+  }
+  return hits;
+}
+
+function scoreStackedCandidate(title: string, keywordHits: TitleKeywordHit[], targetHits: NonNullable<TitleCandidate["targetHits"]>, unplacedTerms: string[], product: TitleProductProfile) {
+  const targetScore = Math.min(42, targetHits.reduce((sum, hit) => sum + (hit.kind === "exact" ? 8 : hit.kind === "expanded" ? 7 : 6), 0));
+  const keywordScore = Math.min(28, keywordHits.slice(0, 12).reduce((sum, hit) => sum + Math.max(2, 12 - Math.log2((hit.rank ?? 80) + 1)), 0));
+  const structureScore = calcStructureScore(title, product) * 2;
+  const endingScore = Math.max(0, titleEndingScore(title, product) / 4);
+  const penalty = Math.min(18, unplacedTerms.length * 4);
+  return Math.max(0, Math.min(100, Math.round(18 + targetScore + keywordScore + structureScore + endingScore - penalty)));
 }
 
 function evaluateTitleRules(title: string, product: TitleProductProfile): TitleRuleCheck[] {

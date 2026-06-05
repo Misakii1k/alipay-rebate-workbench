@@ -52,6 +52,15 @@ function waitForVisibleAnalysis(startedAt: number) {
   return remaining > 0 ? new Promise((resolve) => window.setTimeout(resolve, remaining)) : Promise.resolve();
 }
 
+function splitTitleTargets(value: string) {
+  return String(value || "").split(/[\s,，、;；\n\r]+/).map((word) => word.trim()).filter(Boolean);
+}
+
+function titleCandidateDisplayScore(candidate: Pick<TitleCandidate, "score" | "strategy">): number {
+  const raw = candidate.strategy === "stacked-v2" ? candidate.score : candidate.score / 12;
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
 export function TitleOptimizer({
   settings,
   onSaveSettings,
@@ -120,7 +129,9 @@ export function TitleOptimizer({
       const next = await window.alipayWorkbench.analyzeTitle(settings, {
         productName,
         title: currentTitle,
-        categoryName: categoryName || undefined
+        categoryName: categoryName || undefined,
+        strategy: "stacked-v2",
+        targetKeywords: splitTitleTargets(settings.titleExtraKeywords)
       });
       await waitForVisibleAnalysis(startedAt);
       setAnalysis(next);
@@ -146,7 +157,9 @@ export function TitleOptimizer({
       const next = await window.alipayWorkbench.generateTitleCandidates(settings, {
         productName: nextProductName || productName,
         categoryName: categoryName || parsed.category || undefined,
-        variantCount: 5
+        variantCount: 5,
+        strategy: "stacked-v2",
+        targetKeywords: splitTitleTargets(settings.titleExtraKeywords)
       });
       await waitForVisibleAnalysis(startedAt);
       setGenerated(next);
@@ -168,12 +181,14 @@ export function TitleOptimizer({
       const next = await window.alipayWorkbench.generateTitleCandidates(settings, {
         productName,
         categoryName: categoryName || undefined,
-        variantCount: 5
+        variantCount: 5,
+        strategy: "stacked-v2",
+        targetKeywords: splitTitleTargets(settings.titleExtraKeywords)
       });
       await waitForVisibleAnalysis(startedAt);
       setGenerated(next);
       if (!next.ok) setError(next.message);
-      showToast(settings.titleAiSelectionEnabled ? "AI 智能选词已参与候选生成。" : "已使用纯算法生成候选。");
+      showToast("已使用叠词实验版生成候选。");
     } catch (caught) {
       await waitForVisibleAnalysis(startedAt);
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -246,7 +261,7 @@ export function TitleOptimizer({
         <section className="title-v2-candidates">
           <div className="title-v2-section-head">
             <Sparkles size={16} />
-            <h3>AI 生成的候选标题</h3>
+            <h3>叠词实验版候选标题</h3>
             <span>{generated.candidates.length} 个</span>
           </div>
           <div className="title-v2-candidate-grid">
@@ -335,11 +350,11 @@ function TitleInputCard({
             checked={settings.titleAiSelectionEnabled}
             onChange={async (event) => {
               await onSaveSettings({ ...settings, titleAiSelectionEnabled: event.target.checked });
-              showToast(event.target.checked ? "已开启 AI 智能选词" : "已关闭 AI 智能选词");
+              showToast(event.target.checked ? "已开启旧版 AI 选词" : "已关闭旧版 AI 选词");
             }}
           />
           <span className="title-v2-ai-switch-track"><span className="title-v2-ai-switch-thumb" /></span>
-          <span>AI 智能选词</span>
+          <span>旧版 AI 选词</span>
         </label>
       </div>
       <div className="title-v2-input-grid">
@@ -354,17 +369,17 @@ function TitleInputCard({
               type="button"
               className={clsx("title-v2-category-trigger", categoryPickerOpen && "open")}
               onClick={() => setCategoryPickerOpen((open) => !open)}
-            >
+             title="展开或收起类目选择">
               <span>{selectedCategory ? selectedCategory.name : "自动"}</span>
               <ChevronDown size={14} className={clsx("title-v2-chev", categoryPickerOpen && "open")} />
             </button>
             {categoryPickerOpen && (
               <div className="title-v2-category-menu">
-                <button type="button" className={clsx(!categoryName && "active")} onClick={() => { setCategoryName(""); setCategoryPickerOpen(false); }}>
+                <button type="button" className={clsx(!categoryName && "active")} onClick={() => { setCategoryName(""); setCategoryPickerOpen(false); }} title="使用自动类目匹配">
                   <strong>自动匹配</strong><span>按商品名</span>
                 </button>
                 {categories.slice(0, 32).map((category) => (
-                  <button type="button" key={category.name} className={clsx(category.name === categoryName && "active")} onClick={() => { setCategoryName(category.name); setCategoryPickerOpen(false); }}>
+                  <button type="button" key={category.name} className={clsx(category.name === categoryName && "active")} onClick={() => { setCategoryName(category.name); setCategoryPickerOpen(false); }} title="选择这个标题类目">
                     <strong>{category.name}</strong><span>{category.keywordCount}词</span>
                   </button>
                 ))}
@@ -383,26 +398,26 @@ function TitleInputCard({
         />
       </label>
       <label className="title-v2-field">
-        <span>必含关键词（用空格隔开，会强制带入候选）</span>
+        <span>目标搜索词（空格/逗号分隔，越靠前越重要）</span>
         <input
           value={settings.titleExtraKeywords}
           onChange={async (event) => {
             await onSaveSettings({ ...settings, titleExtraKeywords: event.target.value });
           }}
-          placeholder="例如：棉麻 男款 凉感"
+          placeholder="例如：天丝莱赛尔男士裤子夏薄款 休闲裤 直筒裤"
         />
       </label>
       <div className="title-v2-buttons">
-        <button className="title-v2-primary" onClick={onAnalyze} disabled={analyzing || loadingData}>
+        <button className="title-v2-primary" onClick={onAnalyze} disabled={analyzing || loadingData} title="分析当前标题的搜索权重评分，对比市场关键词数据">
           {analyzing ? <Loader2 className="spin" size={18} /> : <Search size={18} />} 分析评分
         </button>
-        <button className="title-v2-secondary" onClick={onOpenAi}>
-          <Wand2 size={16} /> AI 生成候选
+        <button className="title-v2-secondary" onClick={onOpenAi} title="使用叠词实验版生成严格 60 字节候选">
+          <Wand2 size={16} /> 生成实验版候选
         </button>
-        <button className="title-v2-ghost" onClick={onReload} disabled={loadingData}>
+        <button className="title-v2-ghost" onClick={onReload} disabled={loadingData} title="重新加载市场关键词 Excel 数据">
           {loadingData ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} 刷新数据
         </button>
-        <button className="title-v2-ghost" onClick={onPickExcel}>
+        <button className="title-v2-ghost" onClick={onPickExcel} title="选择新的市场关键词 Excel 文件">
           <FileSpreadsheet size={15} /> 选 Excel
         </button>
       </div>
@@ -457,22 +472,22 @@ function TitleScorePanel({
       </div>
 
       {analysis.candidate && (
-        <button className="title-v2-original-line" onClick={() => onCopy(analysis.title, "标题已复制。")}>
+        <button className="title-v2-original-line" onClick={() => onCopy(analysis.title, "标题已复制。")} title="复制当前原标题">
           <Clipboard size={14} />
           <span>{analysis.title}</span>
         </button>
       )}
 
       <div className="title-v2-tabs">
-        <button className={clsx(activeTab === "keywords" && "active")} onClick={() => setActiveTab("keywords")}>
+        <button className={clsx(activeTab === "keywords" && "active")} onClick={() => setActiveTab("keywords")} title="查看关键词命中">
           <KeyRound size={14} /> 关键词命中
           <em>{analysis.substringHits.length}</em>
         </button>
-        <button className={clsx(activeTab === "rules" && "active")} onClick={() => setActiveTab("rules")}>
+        <button className={clsx(activeTab === "rules" && "active")} onClick={() => setActiveTab("rules")} title="查看标题规则检查">
           <ListChecks size={14} /> 规则检查
           {analysis.candidate && <em>{analysis.candidate.ruleChecks.filter((r) => !r.passed).length} 个未通过</em>}
         </button>
-        <button className={clsx(activeTab === "advice" && "active")} onClick={() => setActiveTab("advice")}>
+        <button className={clsx(activeTab === "advice" && "active")} onClick={() => setActiveTab("advice")} title="查看优化建议">
           <Lightbulb size={14} /> 优化建议
           <em>{analysis.recommendations.length}</em>
         </button>
@@ -573,7 +588,7 @@ function TitleCandidateCardV2({
 }) {
   const [rulesOpen, setRulesOpen] = useState(false);
   const failedRequired = candidate.ruleChecks.filter((rule) => rule.required && !rule.passed);
-  const displayScore = Math.max(0, Math.min(100, Math.round(candidate.score / 12)));
+  const displayScore = titleCandidateDisplayScore(candidate);
   const scoreColor = displayScore >= 80 ? "var(--green)" : displayScore >= 60 ? "var(--gold)" : "var(--red)";
 
   return (
@@ -588,16 +603,37 @@ function TitleCandidateCardV2({
       <div className="title-v2-candidate-title">
         {renderHighlighted(candidate.title, candidate.keywordHits)}
       </div>
+      {candidate.targetHits && candidate.targetHits.length > 0 && (
+        <div className="title-v2-candidate-rules">
+          {candidate.targetHits.slice(0, 6).map((hit) => (
+            <div key={`${hit.target}-${hit.matched}`} className="title-v2-rule-mini ok">
+              <Check size={11} /> {hit.target === hit.matched ? hit.target : `${hit.target}→${hit.matched}`}
+            </div>
+          ))}
+        </div>
+      )}
+      {candidate.unplacedTerms && candidate.unplacedTerms.length > 0 && (
+        <div className="title-v2-warn-line">未放入目标词：{candidate.unplacedTerms.slice(0, 5).join("、")}</div>
+      )}
+      {candidate.sourceTerms && candidate.sourceTerms.length > 0 && (
+        <div className="title-v2-candidate-rules">
+          {candidate.sourceTerms.slice(0, 8).map((term, index) => (
+            <div key={`${term.text}-${index}`} className="title-v2-rule-mini">
+              {term.text}{term.rank ? ` #${term.rank}` : ""}{term.parent && term.parent !== term.text ? ` / ${term.parent}` : ""}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="title-v2-candidate-actions">
-        <button className="title-v2-action" onClick={onCopy}>
+        <button className="title-v2-action" onClick={onCopy} title="复制这个标题">
           <Clipboard size={13} /> 复制
         </button>
         {onCompare && (
-          <button className="title-v2-action" onClick={onCompare}>
+          <button className="title-v2-action" onClick={onCompare} title="加入标题对比">
             <GitCompare size={13} /> 加入对比
           </button>
         )}
-        <button className="title-v2-action ghost" onClick={() => setRulesOpen((v) => !v)}>
+        <button className="title-v2-action ghost" onClick={() => setRulesOpen((v) => !v)} title="展开或收起规则详情">
           <ListChecks size={13} /> 规则{rulesOpen ? "收起" : "展开"}
         </button>
       </div>
@@ -659,7 +695,7 @@ function TitleCompareView({
   onCopy: (text: string, msg: string) => void;
 }) {
   const originalScore = Math.max(0, Math.min(100, Math.round(original.score)));
-  const candidateScore = Math.max(0, Math.min(100, Math.round(candidate.score / 12)));
+  const candidateScore = titleCandidateDisplayScore(candidate);
   const diff = candidateScore - originalScore;
   const diffColor = diff > 0 ? "var(--green)" : diff < 0 ? "var(--red)" : "var(--muted)";
 
@@ -685,7 +721,7 @@ function TitleCompareView({
       <div className="title-v2-compare-head">
         <ArrowLeftRight size={18} />
         <h3>原标题 vs 推荐对比</h3>
-        <button className="title-v2-ghost" onClick={onExit}>
+        <button className="title-v2-ghost" onClick={onExit} title="退出标题对比">
           <X size={14} /> 退出对比
         </button>
       </div>
@@ -697,7 +733,7 @@ function TitleCompareView({
             <strong className="title-v2-compare-score">{originalScore}</strong>
             <em className="title-v2-compare-score-unit">/100</em>
           </div>
-          <button className="title-v2-compare-title" onClick={() => onCopy(original.title, "原标题已复制。")}>
+          <button className="title-v2-compare-title" onClick={() => onCopy(original.title, "原标题已复制。")} title="复制这个对比标题">
             {original.title}
           </button>
           <div className="title-v2-compare-meta">
@@ -719,7 +755,7 @@ function TitleCompareView({
             <strong className="title-v2-compare-score highlight">{candidateScore}</strong>
             <em className="title-v2-compare-score-unit">/100</em>
           </div>
-          <button className="title-v2-compare-title" onClick={() => onCopy(candidate.title, "推荐标题已复制。")}>
+          <button className="title-v2-compare-title" onClick={() => onCopy(candidate.title, "推荐标题已复制。")} title="复制这个对比标题">
             {candidate.title}
           </button>
           <div className="title-v2-compare-meta">
@@ -810,13 +846,13 @@ function TitleAIDrawer({
         <div className="title-v2-drawer-head">
           <Wand2 size={18} />
           <h3>AI 生成候选</h3>
-          <button className="title-v2-ghost" onClick={onClose}><X size={15} /></button>
+          <button className="title-v2-ghost" onClick={onClose} title="关闭弹窗"><X size={15} /></button>
         </div>
         <div className="title-v2-drawer-body">
           <div className="title-v2-drawer-step">
             <span className="title-v2-step">①</span>
             <strong>把这段提示词喂给浏览器里的 AI</strong>
-            <button className="title-v2-ghost-line" onClick={onCopyPrompt}>
+            <button className="title-v2-ghost-line" onClick={onCopyPrompt} title="复制 AI 提示词">
               <Clipboard size={13} /> 复制提示词
             </button>
             <pre className="title-v2-prompt-box">{aiPrompt}</pre>
@@ -827,7 +863,7 @@ function TitleAIDrawer({
             <textarea className="title-v2-json-box" value={aiJson} onChange={(e) => setAiJson(e.target.value)} />
           </div>
           <div className="title-v2-drawer-actions">
-            <button className="title-v2-primary" onClick={onGenerate} disabled={generating || loadingData}>
+            <button className="title-v2-primary" onClick={onGenerate} disabled={generating || loadingData} title="根据 JSON 生成候选标题">
               {generating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />} 生成 5 个候选
             </button>
           </div>

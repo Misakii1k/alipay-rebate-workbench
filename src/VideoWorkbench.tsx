@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, FileAudio, FolderOpen, ImagePlus, Loader2, List, Play, Plus, Search, Scissors, Stethoscope, Table2, Trash2, Video, X } from "lucide-react";
+import { Check, FileAudio, FolderOpen, ImagePlus, Loader2, List, Play, Plus, Search, Scissors, Stethoscope, Table2, Trash2, Video, X, Zap } from "lucide-react";
 import clsx from "clsx";
 import type { AppSettings, FfmpegStatus, VideoCandidate, VideoRenderProgress, VideoTask, VideoTemplateId } from "./lib/shared";
 import { autoFillSliceImages, createVideoTask, isTaskReady, normalizeVideoTask, updateTaskName } from "./lib/video";
@@ -217,7 +217,7 @@ export function VideoWorkbench({
     }
     setMatching(true);
     try {
-      const candidates = await window.alipayWorkbench.scanVideoLibrary(settings, currentTask.productName, currentTask.colorName);
+      const candidates = await window.alipayWorkbench.scanVideoLibrary(settings, currentTask.productName, currentTask.colorName, settings.videoSpeedMode);
       updateCurrent({ candidates });
       setCandidateOpen(true);
       showToast(candidates.length ? `找到 ${candidates.length} 个候选素材。` : "没有找到足够匹配的素材。");
@@ -322,13 +322,13 @@ export function VideoWorkbench({
       <div className="video-settings-strip" data-tour="video-paths">
         <PathBadge label="视频库" value={settings.videoLibraryDir} onPick={() => chooseDirectory("library")} />
         <PathBadge label="输出目录" value={settings.videoOutputDir} onPick={() => chooseDirectory("output")} />
-        <button className="secondary-action light" onClick={runDiagnosis} disabled={diagnosing}>
+        <button className="secondary-action light" onClick={runDiagnosis} disabled={diagnosing} title="检查并诊断 FFmpeg 配置">
           {diagnosing ? <Loader2 className="spin" size={16} /> : <Stethoscope size={16} />} 诊断修复
         </button>
       </div>
 
       <div className="template-switch" data-tour="video-template">
-        <button className={clsx(currentTask.template !== "video-slice" && "active")} onClick={() => updateCurrent({ template: "bos-template" as VideoTemplateId })}>帛先生模板</button>
+        <button className={clsx(currentTask.template !== "video-slice" && "active")} onClick={() => updateCurrent({ template: "bos-template" as VideoTemplateId })} title="切换到帛先生视频模板">帛先生模板</button>
         <button disabled title="功能维护中，暂不可用">视频切片（暂不可用）</button>
         <span>{ffmpegStatus.detail}</span>
       </div>
@@ -349,7 +349,7 @@ export function VideoWorkbench({
               onSlotRemove={removeSliceImage}
             />
           ) : <FilePreview path={currentTask.imagePath} />}
-          <button type="button" className="inline-mini" onClick={(event) => { event.stopPropagation(); void chooseLatestImage(); }}>选择最新图片</button>
+          <button type="button" className="inline-mini" onClick={(event) => { event.stopPropagation(); void chooseLatestImage(); }} title="从文件夹中选择最新图片">选择最新图片</button>
         </UploadBox>
 
         <div className="rename-panel">
@@ -384,17 +384,24 @@ export function VideoWorkbench({
       </div>
 
       <div className="video-actions" data-tour="video-actions">
-        <button className="secondary-action light" onClick={() => addTask()}><Plus size={17} /> 下一个视频</button>
-        <button className="secondary-action light" onClick={smartMatch} disabled={matching || currentTask.template === "video-slice"}>
+        <button className="secondary-action light" onClick={() => addTask()} title="添加一个新的剪辑任务到队列末尾"><Plus size={17} /> 下一个视频</button>
+        <button className="secondary-action light" onClick={smartMatch} disabled={matching || currentTask.template === "video-slice"} title="扫描视频库，按商品名和颜色智能匹配素材">
           {matching ? <Loader2 className="spin" size={17} /> : <Search size={17} />} 智能选择
         </button>
-        <button className="primary" onClick={renderCurrent} disabled={processing || !ffmpegStatus.available}>
+        <button
+          className={clsx("speed-toggle", settings.videoSpeedMode && "active")}
+          onClick={() => onSaveSettings({ ...settings, videoSpeedMode: !settings.videoSpeedMode })}
+          title={settings.videoSpeedMode ? "极速模式已开启：跳过缩略图生成，扫描更快" : "标准模式：加载素材缩略图预览"}
+        >
+          <Zap size={15} /> 极速
+        </button>
+        <button className="primary" onClick={renderCurrent} disabled={processing || !ffmpegStatus.available} title="使用 FFmpeg 渲染当前任务的视频">
           {processing ? <Loader2 className="spin" size={18} /> : <Play size={18} />} 开始制作
         </button>
-        <button className="secondary-action" onClick={renderAllReady} disabled={processing || !ffmpegStatus.available}>
+        <button className="secondary-action" onClick={renderAllReady} disabled={processing || !ffmpegStatus.available} title="依次渲染所有素材已就绪的任务">
           <Check size={17} /> 批量制作全部
         </button>
-        <button className="secondary-action light danger-ghost" onClick={clearAllTasks} disabled={processing}>
+        <button className="secondary-action light danger-ghost" onClick={clearAllTasks} disabled={processing} title="删除所有任务记录和输出文件引用">
           <Trash2 size={17} /> 清空记录
         </button>
         <span className="queue-summary">任务 {currentIndex + 1} / {tasks.length}，可制作 {readyCount} 条</span>
@@ -423,11 +430,11 @@ export function VideoWorkbench({
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             {!diagnosis.ok && (
-              <button className="secondary-action compact" onClick={runAutoFix} disabled={fixing}>
+              <button className="secondary-action compact" onClick={runAutoFix} disabled={fixing} title="尝试自动修复 FFmpeg 配置问题">
                 {fixing ? <><Loader2 className="spin" size={14} /> 修复中…</> : "尝试自动修复"}
               </button>
             )}
-            <button className="secondary-action light compact" onClick={() => setDiagnosis(null)}>关闭诊断</button>
+            <button className="secondary-action light compact" onClick={() => setDiagnosis(null)} title="关闭诊断结果">关闭诊断</button>
           </div>
         </div>
       )}
@@ -455,7 +462,7 @@ function baseName(filePath: string) {
 
 function PathBadge({ label, value, onPick }: { label: string; value: string; onPick: () => void }) {
   return (
-    <button className="path-badge" onClick={onPick}>
+    <button className="path-badge" onClick={onPick} title="选择路径">
       <FolderOpen size={16} />
       <span>{label}</span>
       <strong>{value || "未选择"}</strong>
@@ -481,6 +488,7 @@ function UploadBox({
       type="button"
       className="upload-box"
       onClick={onClick}
+      title={`点击选择${icon === "image" ? "图片" : "视频"}文件，也可以直接拖拽文件到此处`}
       onDragOver={(event) => {
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
@@ -532,7 +540,7 @@ function SliceImageGrid({ task, activeSlot, onSlotClick, onSlotDrop, onSlotRemov
           >
             <span>{index + 1}</span>
             {filled && (
-              <button className="slice-slot-delete" onClick={(e) => { e.stopPropagation(); onSlotRemove(index); }}>
+              <button className="slice-slot-delete" onClick={(e) => { e.stopPropagation(); onSlotRemove(index); }} title="删除这个图片槽位">
                 <Trash2 size={11} />
               </button>
             )}
@@ -550,9 +558,9 @@ function MusicPicker({ task, settings, onPreset, onCustom }: { task: VideoTask; 
       <span><FileAudio size={15} /> 切片音乐 <b>内置 CC0</b></span>
       <div className="music-grid">
         {musicPresets.map((item) => (
-          <button key={item.id} className={clsx(active === item.id && "active")} onClick={() => onPreset(item.id)}>{item.label}<small>{item.source}</small></button>
+          <button key={item.id} className={clsx(active === item.id && "active")} onClick={() => onPreset(item.id)} title="选择这首内置音乐">{item.label}<small>{item.source}</small></button>
         ))}
-        <button className={clsx(active === "custom" && "active")} onClick={onCustom}>自选音乐</button>
+        <button className={clsx(active === "custom" && "active")} onClick={onCustom} title="选择自定义音乐文件">自选音乐</button>
       </div>
       <em>{task.musicPath || settings.sliceCustomMusicPath || "未选择音乐时会生成无音乐视频"}</em>
     </div>
@@ -564,10 +572,10 @@ function TaskQueue({ tasks, currentIndex, onPick, onRemove }: { tasks: VideoTask
     <div className="task-queue">
       {tasks.map((task, index) => (
         <div key={task.id} className={clsx("task-queue-item", index === currentIndex && "active", task.status)}>
-          <button className="task-queue-label" onClick={() => onPick(index)}>
+          <button className="task-queue-label" onClick={() => onPick(index)} title="切换到这个视频任务">
             {index + 1}. {task.outputName || "未命名"} <span>{task.progress ? `${task.progress}%` : ""}</span>
           </button>
-          <button className="task-queue-delete" onClick={() => onRemove(index)}><Trash2 size={13} /></button>
+          <button className="task-queue-delete" onClick={() => onRemove(index)} title="删除这个视频任务"><Trash2 size={13} /></button>
         </div>
       ))}
     </div>
@@ -624,14 +632,14 @@ function CandidateModal({
         <div className="modal-title">
           <strong>智能推荐素材</strong>
           <div className="modal-tools">
-            <button onClick={() => onViewChange("thumb")} className={clsx(view === "thumb" && "active")}><Table2 size={17} /></button>
-            <button onClick={() => onViewChange("list")} className={clsx(view === "list" && "active")}><List size={17} /></button>
-            <button onClick={onClose}><X size={18} /></button>
+            <button onClick={() => onViewChange("thumb")} className={clsx(view === "thumb" && "active")} title="缩略图视图"><Table2 size={17} /></button>
+            <button onClick={() => onViewChange("list")} className={clsx(view === "list" && "active")} title="列表视图"><List size={17} /></button>
+            <button onClick={onClose} title="关闭弹窗"><X size={18} /></button>
           </div>
         </div>
         <div className={clsx("candidate-list", view)}>
           {candidates.length ? candidates.map((candidate) => (
-            <button key={candidate.path} onClick={() => onPick(candidate)}>
+            <button key={candidate.path} onClick={() => onPick(candidate)} title="选择这个推荐素材">
               {view === "thumb" && <CandidateThumb candidate={candidate} />}
               <strong>{candidate.fileName}</strong>
               <span>匹配度 {candidate.score} · {candidate.reason}</span>

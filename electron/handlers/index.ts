@@ -14,11 +14,12 @@ import * as titleHandler from "./title";
 import * as ffmpegHandler from "./ffmpeg";
 import * as videoHandler from "./video";
 import * as reviewHandler from "./review";
+import * as recognitionHandler from "./recognition";
 
 /**
  * 注册所有已模块化的 IPC handlers。
  *
- * 已完成的 handlers（17个模块，40个handler）：
+ * 已完成的 handlers（18个模块，43个handler）：
  * - settings (2个): settings:load, settings:save
  * - workbench (4个): workbench:load/save, videoWorkbench:load/save
  * - window (3个): window:minimize/toggleMaximize/close
@@ -34,6 +35,7 @@ import * as reviewHandler from "./review";
  * - ffmpeg (3个): ffmpeg:status/diagnose/autoFix
  * - video (2个): video:scanLibrary/renderTask
  * - review (6个): review:scanAssets/loadThumbnails/loadThumbnailBatch/rebuildIndex/generateCopy, drag:startFiles
+ * - recognition (3个): recognition:recognizeText/cloudReview/learnFromChoice
  *
  * @param ipcMain Electron IpcMain 实例
  */
@@ -54,4 +56,5 @@ export function registerAllHandlers(ipcMain: IpcMain): void {
   ffmpegHandler.register(ipcMain);
   videoHandler.register(ipcMain);
   reviewHandler.register(ipcMain);
+  recognitionHandler.register(ipcMain);
 }

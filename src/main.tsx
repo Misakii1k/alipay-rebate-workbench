@@ -113,7 +113,17 @@ if (!window.alipayWorkbench) {
     exportWorkbook: async () => {
       alert("浏览器预览模式不导出 Excel；Electron 窗口启动后会调用系统保存对话框导出。");
       return { canceled: true };
-    }
+    },
+    recognizeText: async (text) => {
+      const { recognizeByRules, recognizePartialByRules } = await import("./lib/recognition");
+      const rules = recognizeByRules(text);
+      if (rules) return rules;
+      const partial = recognizePartialByRules(text);
+      if (partial) return partial;
+      throw new Error("浏览器预览模式下本地规则无法识别，且不支持云端 AI 识别。");
+    },
+    reviewRecognitionCloud: async () => ({ status: "error", reason: "浏览器预览模式不支持云端校验，请使用桌面端。" }),
+    learnFromChoice: async () => ({ note: "", reason: "浏览器预览模式不支持学习反馈" })
   };
 }
 
