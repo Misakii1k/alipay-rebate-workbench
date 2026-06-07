@@ -1107,7 +1107,6 @@ html[data-ui-design="atelier"][data-theme="light"] .window-title-mark {
 
 html[data-ui-design="atelier"][data-theme="light"] .main {
   position: relative;
-  overflow: hidden;
   background:
     linear-gradient(90deg, rgba(65, 54, 38, 0.045) 1px, transparent 1px) 0 0 / 34px 34px,
     linear-gradient(0deg, rgba(65, 54, 38, 0.035) 1px, transparent 1px) 0 0 / 34px 34px,
@@ -1202,23 +1201,22 @@ html[data-ui-design="atelier"][data-theme="light"] .bottom-btn.active {
 
 html[data-ui-design="atelier"][data-theme="light"] .topbar {
   background:
-    linear-gradient(135deg, rgba(31, 45, 37, 0.96), rgba(25, 35, 30, 0.92)),
-    var(--panel);
-  border-color: rgba(255, 249, 237, 0.14);
+    linear-gradient(180deg, rgba(255, 251, 242, 0.96), rgba(246, 235, 216, 0.88));
+  border-color: rgba(65, 54, 38, 0.14);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .topbar h1 {
-  color: #fff8eb;
+  color: #20251f;
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .topbar .eyebrow {
-  color: #d6b26f;
+  color: #aa6f2d;
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .topbar .status-pill {
-  color: rgba(255, 249, 237, 0.72);
-  background: rgba(255, 249, 237, 0.08);
-  border-color: rgba(255, 249, 237, 0.14);
+  color: #746a5b;
+  background: rgba(65, 54, 38, 0.06);
+  border-color: rgba(65, 54, 38, 0.14);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .panel,
@@ -1244,7 +1242,7 @@ html[data-ui-design="atelier"][data-theme="light"] .home-hero {
   min-height: 340px;
   padding: 38px 42px;
   background:
-    linear-gradient(108deg, #233529 0 62.4%, #2b3d31 62.4% 63.1%, #f7ead4 63.1% 100%);
+    linear-gradient(108deg, #233529 0 60%, #2b3d31 60% 62%, #8a9b80 62% 63.5%, #c5b99a 63.5% 65%, #f7ead4 65% 100%);
   border-color: rgba(65, 54, 38, 0.22);
   box-shadow: 0 24px 70px rgba(54, 42, 26, 0.20);
 }

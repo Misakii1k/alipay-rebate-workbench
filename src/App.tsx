@@ -60,9 +60,10 @@ import {
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
 
-const APP_VERSION = "0.10.8";
+const APP_VERSION = "0.10.9";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "0.10.9 修了几个界面上的小毛病：浅色模式下页面能正常滚动了，按钮不会再被切掉一半；顶部工具栏在浅色模式下颜色暖和了，看着不突兀；首页那条深浅分界线过渡更自然；主题切换的水波纹扩散动画恢复了。",
   "0.10.8 界面变得更好看了：首页大标题不再被挤断成两行，每个工具卡片有了自己的颜色，鼠标放上去会轻轻浮起来；首页那两个数字（今日返款、待处理）看着更清楚；按钮颜色更顺眼。深色和浅色两种皮肤都一起美化了。",
   "0.10.7 前端切换为 Atelier 高端外观，移除旧版 Classic UI 入口。",
   "0.10.6 视频剪辑修复：中文路径兜底更可靠，转换失败时不再静默降级导致剪辑报错。",
@@ -284,29 +285,29 @@ export default function App() {
     setView(key === "rebate" ? "import" : key);
   }
 
-  function toggleTheme(event: React.MouseEvent<HTMLButtonElement>) {
+  function toggleTheme(e?: React.MouseEvent) {
     const nextTheme = theme === "dark" ? "light" : "dark";
     const doc = document as Document & {
-      startViewTransition?: (callback: () => void) => { ready: Promise<void> };
+      startViewTransition?: (callback: () => void) => { ready: Promise<void>; finished: Promise<void> };
     };
     if (!doc.startViewTransition) {
+      document.documentElement.classList.add("theme-smooth-transition");
       setTheme(nextTheme);
+      window.setTimeout(() => document.documentElement.classList.remove("theme-smooth-transition"), 460);
       return;
     }
-    const x = event.clientX;
-    const y = event.clientY;
-    const endRadius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    let x = window.innerWidth / 2, y = window.innerHeight / 2;
+    if (e) {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      x = rect.left + rect.width / 2;
+      y = rect.top + rect.height / 2;
+    }
+    const maxR = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
     const transition = doc.startViewTransition(() => setTheme(nextTheme));
     void transition.ready.then(() => {
       document.documentElement.animate(
-        {
-          clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${endRadius}px at ${x}px ${y}px)`]
-        },
-        {
-          duration: 560,
-          easing: "cubic-bezier(.22, 1, .36, 1)",
-          pseudoElement: "::view-transition-new(root)"
-        }
+        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${maxR}px at ${x}px ${y}px)`] },
+        { duration: 500, easing: "cubic-bezier(.22, 1, .36, 1)", pseudoElement: "::view-transition-new(root)" }
       );
     });
   }
@@ -690,7 +691,7 @@ export default function App() {
       <aside className={clsx("sidebar", settings.sidebarCollapsed && "collapsed")}>
         <div className="brand">
           <BrandGlyph className="brand-mark" />
-          <div><strong>{settings.toolboxName}</strong><span>E-commerce ops kit</span></div>
+          <div><strong>{settings.toolboxName}</strong><span>OPS WORKBENCH</span></div>
           <button
             className="sidebar-collapse"
             onClick={() => void saveSettings({ ...settings, sidebarCollapsed: !settings.sidebarCollapsed })}
@@ -719,7 +720,7 @@ export default function App() {
           </div>
         )}
         <div className="bottom-actions">
-          <button className="bottom-btn" onClick={toggleTheme} title={theme === "dark" ? "切换浅色模式" : "切换深色模式"}>
+          <button className="bottom-btn" onClick={(e) => toggleTheme(e)} title={theme === "dark" ? "切换浅色模式" : "切换深色模式"}>
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
           {(() => {
@@ -869,7 +870,7 @@ function ToolboxHome({ settings, pendingCount, totalAmount, onOpen }: { settings
     <section className="home-dashboard">
       <div className="home-hero">
         <div className="home-hero-bg" aria-hidden="true" />
-        <div className="home-hero-content"><p className="eyebrow">电商运营中控台</p><h1>{settings.toolboxName}</h1><p>把返款、视频、收评、标题优化和核对放在同一个工作台。</p></div>
+        <div className="home-hero-content"><p className="eyebrow">E-COMMERCE OPS</p><h1>{settings.toolboxName}</h1><p>把返款、视频、收评、标题优化和核对放在同一个工作台。</p></div>
         <div className="home-metrics"><span className="metric-green"><strong>{formatMoney(totalAmount)}</strong>今日返款总金额</span><span className="metric-gold"><strong>{pendingCount}</strong>待处理笔数</span></div>
       </div>
       <div className="bento-grid">
