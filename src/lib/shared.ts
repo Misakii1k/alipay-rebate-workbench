@@ -483,6 +483,9 @@ export const DEFAULT_API_PROFILE: ApiProfile = {
 };
 
 export const DEFAULT_TITLE_KEYWORD_EXCEL_PATH = "C:\\Users\\87850\\Desktop\\市场关键词帛先生.xlsx";
+export const DEFAULT_GITHUB_UPDATE_OWNER = "Misakii1k";
+export const DEFAULT_GITHUB_UPDATE_REPO = "alipay-rebate-workbench-releases";
+export const DEFAULT_GITHUB_UPDATE_URL = `https://github.com/${DEFAULT_GITHUB_UPDATE_OWNER}/${DEFAULT_GITHUB_UPDATE_REPO}`;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   apiProfiles: [DEFAULT_API_PROFILE],
@@ -515,7 +518,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   videoTemplate: "bos-template",
   videoOutputSize: "auto",
   videoQualityMode: "preserve",
-  updateFeedUrl: "",
+  updateFeedUrl: DEFAULT_GITHUB_UPDATE_URL,
   reviewRootDir: "",
   reviewProfessionalLevel: 2,
   reviewBuyerLevel: 4,
@@ -632,7 +635,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     videoTemplate: normalizeVideoTemplate(raw.videoTemplate),
     videoOutputSize: normalizeVideoOutputSize(raw.videoOutputSize),
     videoQualityMode: normalizeVideoQualityMode(raw.videoQualityMode),
-    updateFeedUrl: String(raw.updateFeedUrl ?? ""),
+    updateFeedUrl: String(raw.updateFeedUrl ?? DEFAULT_GITHUB_UPDATE_URL),
     reviewRootDir: String(raw.reviewRootDir ?? ""),
     reviewProfessionalLevel: clampNumber(raw.reviewProfessionalLevel, 0, 5, DEFAULT_SETTINGS.reviewProfessionalLevel),
     reviewBuyerLevel: clampNumber(raw.reviewBuyerLevel, 0, 5, DEFAULT_SETTINGS.reviewBuyerLevel),

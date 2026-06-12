@@ -7,7 +7,7 @@ import { loadSettings } from "../utils/settings";
  * 注册自动更新相关的 IPC handlers。
  */
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("update:check", async (_event, _settings: AppSettings) => checkForUpdates(await loadSettings()));
+  ipcMain.handle("update:check", async (_event, settings: AppSettings) => checkForUpdates(settings ?? await loadSettings()));
   ipcMain.handle("update:download", () => downloadUpdate());
   ipcMain.handle("update:install", () => installUpdate());
 }

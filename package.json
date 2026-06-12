@@ -1,6 +1,6 @@
 {
   "name": "alipay-rebate-workbench",
-  "version": "0.11.4",
+  "version": "0.11.5",
   "private": true,
   "description": "电商运营工具箱桌面客户端",
   "main": "dist-electron/electron/main.js",
@@ -16,6 +16,7 @@
     "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json",
     "package": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis",
+    "publish:github": "node scripts/publish-github-release.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "start": "electron ."
   },
@@ -76,7 +77,16 @@
       "artifactName": "${productName}-${version}-Setup.${ext}",
       "unicode": true,
       "differentialPackage": true
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Misakii1k",
+        "repo": "alipay-rebate-workbench-releases",
+        "private": false,
+        "releaseType": "release"
+      }
+    ]
   },
   "dependencies": {
     "electron-updater": "^6.3.9",

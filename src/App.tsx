@@ -49,6 +49,7 @@ import {
   RecognitionLearningPayload,
   RecognitionResult,
   ToolboxTool,
+  UpdateStatus,
   VideoWorkbenchState,
   detectModelCapabilities,
   getActiveApiProfile,
@@ -60,9 +61,10 @@ import {
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
 
-const APP_VERSION = "0.11.4";
+const APP_VERSION = "0.11.5";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "0.11.5 云更新接入：支持“私有源码仓库 + 公开 GitHub Releases 仓库”的自动更新链路，设置页可检查、下载并安装新版本。",
   "0.11.4 低配流畅度收口：收评文件夹改为展开时懒加载，连续收评/视频扫描会取消旧 worker；视频智能扫描新增自动/极速/标准三态，对比工具大名单分页渲染。",
   "0.11.3 低配流畅度收口：返款预览分页渲染，视频候选和任务队列窗口化；低配模式下智能扫描自动跳过候选缩略图，极速模式状态更清晰。",
   "0.11.2 低配流畅度优化：新增性能模式，低性能设备自动减少动效、阴影和缩略图并发；收评助手拆分缩略图状态，视频极速模式标识更明确，标题和对比工具减少等待与高频重算。",
@@ -1127,7 +1129,16 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
   const [modelSelectFor, setModelSelectFor] = useState<"text" | "vision" | null>(null);
   const [modelCache, setModelCache] = useState<Record<string, { id: string; name: string }[]>>({});
   const [testingModel, setTestingModel] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: "idle", detail: "尚未检查更新。" });
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => window.alipayWorkbench.onUpdateStatus((status) => {
+    setUpdateStatus(status);
+    if (status.state !== "checking") setCheckingUpdate(false);
+    if (status.state !== "downloading") setDownloadingUpdate(false);
+  }), []);
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setDraft((prev) => ({ ...prev, [key]: value }));
   const activeProfile = getActiveApiProfile(draft);
   const setProfile = (patch: Partial<ApiProfile>) => setDraft((prev) => syncActiveApiProfile(prev, patch));
@@ -1215,6 +1226,41 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
       return result;
     } finally {
       setTestingModel(false);
+    }
+  };
+
+  const handleCheckUpdates = async () => {
+    setCheckingUpdate(true);
+    try {
+      const status = await window.alipayWorkbench.checkForUpdates(draft);
+      setUpdateStatus(status);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "检查更新失败。";
+      setUpdateStatus({ state: "error", detail });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    setDownloadingUpdate(true);
+    try {
+      await window.alipayWorkbench.downloadUpdate();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "下载更新失败。";
+      setUpdateStatus({ state: "error", detail });
+      setDownloadingUpdate(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    setInstallingUpdate(true);
+    try {
+      await window.alipayWorkbench.installUpdate();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "安装更新失败。";
+      setUpdateStatus({ state: "error", detail });
+      setInstallingUpdate(false);
     }
   };
 
@@ -1366,6 +1412,25 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
         <button className="secondary-action" onClick={() => void handleTestModel(draft)} disabled={testingModel} title="测试当前大模型配置是否可用">
           {testingModel ? <><Loader2 size={17} className="spin" /> 测试中…</> : <><KeyRound size={17} /> 测试大模型连接</>}
         </button>
+        <label><span>GitHub 更新仓库</span><input value={draft.updateFeedUrl} onChange={(event) => set("updateFeedUrl", event.target.value)} placeholder="https://github.com/Misakii1k/alipay-rebate-workbench-releases" /></label>
+        <div className="hint-card">源码仓库可以继续保持私有；这里填写公开的 GitHub Releases 仓库地址即可。应用只会读取更新包和元数据，不会暴露你的私有源码仓库。</div>
+        <div className="hint-card">
+          <strong>自动更新：{updateStatusLabel(updateStatus.state)}</strong>
+          <span>{updateStatus.detail}</span>
+          {updateStatus.version && <span>目标版本：{updateStatus.version}</span>}
+          {typeof updateStatus.percent === "number" && <span>下载进度：{Math.round(updateStatus.percent)}%</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="secondary-action" onClick={() => void handleCheckUpdates()} disabled={checkingUpdate || downloadingUpdate || installingUpdate} title="检查公开发布仓库中的最新版本">
+            {checkingUpdate || updateStatus.state === "checking" ? <><Loader2 size={17} className="spin" /> 检查中…</> : <><Download size={17} /> 检查更新</>}
+          </button>
+          <button className="secondary-action light" onClick={() => void handleDownloadUpdate()} disabled={!(updateStatus.state === "available" || updateStatus.state === "downloading") || checkingUpdate || installingUpdate} title="下载当前可用的新版本安装包">
+            {downloadingUpdate || updateStatus.state === "downloading" ? <><Loader2 size={17} className="spin" /> 下载中…</> : <><ArrowRight size={17} /> 下载更新</>}
+          </button>
+          <button className="secondary-action light" onClick={() => void handleInstallUpdate()} disabled={updateStatus.state !== "downloaded" || installingUpdate} title="退出并安装已经下载好的新版本">
+            {installingUpdate ? <><Loader2 size={17} className="spin" /> 安装中…</> : <><Play size={17} /> 立即安装</>}
+          </button>
+        </div>
       </div></Panel></section>}
       {section === "rebate" && <section className="settings-grid single"><Panel title="支付宝返款设置" icon={FileSpreadsheet}><div className="form-stack">
         <label><span>导出文件名中的名字</span><input value={draft.exportNameOwner} onChange={(event) => set("exportNameOwner", event.target.value)} /></label>
@@ -1378,7 +1443,7 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
         <button className="secondary-action light" onClick={() => set("learningPromptNotes", "")} title="清空已经学习到的识别纠偏规则">清空学习规则</button>
       </div></Panel></section>}
       {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-720">720 × 960</option><option value="story-1080">1080 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
-      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><div className="hint-card">自动更新暂未启用；发布源和签名策略确认后再开放。</div></div></Panel></section>}
+      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><div className="hint-card">云更新配置已移到“全局设置”。源码仓库可保持私有，应用更新只读取公开的 Releases 仓库。</div></div></Panel></section>}
       {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()} title="选择标题关键词 Excel 文件"><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><span className="settings-autosave-hint">{lastSaved ? `已自动保存 ${new Date(lastSaved).toLocaleTimeString()}` : ""}</span></div>
@@ -1515,4 +1580,8 @@ function statusLabel(status: RebateRow["status"]) {
 
 function modelStatusLabel(state: ModelConnectionStatus["state"]) {
   return { unknown: "未测试", testing: "测试中", connected: "已连接", failed: "失败" }[state];
+}
+
+function updateStatusLabel(state: UpdateStatus["state"]) {
+  return { idle: "待机", checking: "检查中", available: "可更新", "not-available": "已最新", downloading: "下载中", downloaded: "待安装", error: "失败" }[state];
 }
