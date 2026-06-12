@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
-import type { WorkbenchState, VideoWorkbenchState } from "../../src/lib/shared";
+import type { WorkbenchState, VideoCandidate, VideoTask, VideoWorkbenchState } from "../../src/lib/shared";
 import { DEFAULT_WORKBENCH_STATE, DEFAULT_VIDEO_WORKBENCH_STATE } from "../../src/lib/shared";
 import { appendLog } from "./logger";
 import { userDataPath, ensureUserDataDir } from "./paths";
@@ -38,9 +38,31 @@ export async function loadVideoWorkbenchState(): Promise<VideoWorkbenchState> {
   }
 }
 
+function compactCandidate(candidate: VideoCandidate): VideoCandidate {
+  const { thumbnailDataUrl: _thumbnailDataUrl, ...rest } = candidate;
+  return rest;
+}
+
+function compactVideoTask(task: VideoTask): VideoTask {
+  return {
+    ...task,
+    candidates: (task.candidates || []).slice(0, 80).map(compactCandidate),
+    log: task.log ? task.log.slice(-16_000) : task.log
+  };
+}
+
+function compactVideoWorkbenchState(state: VideoWorkbenchState): VideoWorkbenchState {
+  return {
+    ...DEFAULT_VIDEO_WORKBENCH_STATE,
+    ...state,
+    tasks: (state.tasks || []).map(compactVideoTask),
+    savedAt: new Date().toISOString()
+  };
+}
+
 export async function saveVideoWorkbenchState(state: VideoWorkbenchState): Promise<VideoWorkbenchState> {
   await ensureUserDataDir();
-  const next = { ...DEFAULT_VIDEO_WORKBENCH_STATE, ...state, savedAt: new Date().toISOString() };
+  const next = compactVideoWorkbenchState(state);
   await fs.writeFile(userDataPath("video-workbench-state.json"), JSON.stringify(next, null, 2), "utf-8");
   return next;
 }

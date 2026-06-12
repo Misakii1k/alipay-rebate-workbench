@@ -1,5 +1,6 @@
 import { nativeImage } from "electron";
 import type { NativeImage } from "electron";
+import path from "node:path";
 
 /**
  * 生成图片签名（用于剪贴板变化检测）。
@@ -25,6 +26,33 @@ export function imageToDataUrl(filePath: string, maxSide = 720): string | undefi
   const scale = Math.min(1, maxSide / Math.max(size.width, size.height));
   const resized = scale < 1 ? image.resize({ width: Math.round(size.width * scale), height: Math.round(size.height * scale) }) : image;
   return resized.toDataURL();
+}
+
+function imageMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".bmp") return "image/bmp";
+  return "image/png";
+}
+
+export async function imageToDataUrlAsync(filePath: string, maxSide = 720): Promise<string | undefined> {
+  try {
+    const sharp = (await import("sharp")).default;
+    const buffer = await sharp(filePath)
+      .rotate()
+      .resize({ width: maxSide, height: maxSide, fit: "inside", withoutEnlargement: true })
+      .png({ compressionLevel: 8, adaptiveFiltering: true })
+      .toBuffer();
+    return `data:image/png;base64,${buffer.toString("base64")}`;
+  } catch {
+    const fallback = imageToDataUrl(filePath, maxSide);
+    if (!fallback) return undefined;
+    if (fallback.startsWith("data:image/")) return fallback;
+    const marker = "base64,";
+    const index = fallback.indexOf(marker);
+    return index >= 0 ? `data:${imageMimeType(filePath)};base64,${fallback.slice(index + marker.length)}` : fallback;
+  }
 }
 
 /**

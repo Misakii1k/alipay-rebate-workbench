@@ -2,6 +2,7 @@ import { type IpcMain } from "electron";
 import type { AppSettings } from "../../src/lib/shared";
 import { normalizeSettings } from "../../src/lib/shared";
 import { resolveEverythingEsPath, searchWithEverything } from "../utils/everything";
+import { loadSettings } from "../utils/settings";
 
 async function testEverythingConnection(settings: AppSettings): Promise<{ available: boolean; detail: string }> {
   const esPath = resolveEverythingEsPath(settings);
@@ -18,5 +19,5 @@ async function testEverythingConnection(settings: AppSettings): Promise<{ availa
  * 注册 Everything 搜索相关的 IPC handlers。
  */
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("everything:test", (_event, settings: AppSettings) => testEverythingConnection(normalizeSettings(settings)));
+  ipcMain.handle("everything:test", async () => testEverythingConnection(normalizeSettings(await loadSettings())));
 }

@@ -1,25 +1,24 @@
-import { dialog, type IpcMain, type BrowserWindow } from "electron";
+import { app, dialog, type IpcMain, type BrowserWindow } from "electron";
 import { existsSync } from "node:fs";
 import { promises as fs } from "node:fs";
-import ExcelJS from "exceljs";
+import path from "node:path";
+import type ExcelJS from "exceljs";
 import type { AppSettings, TitleKeywordData, TitleCategoryData, TitleKeywordEntry, TitleGeneratePayload, TitleAnalyzePayload, SelectPathResult } from "../../src/lib/shared";
 import { normalizeSettings, getReviewApiProfile, DEFAULT_SETTINGS } from "../../src/lib/shared";
 import { generateTitleScore, analyzeTitleScore, previewTokenPool, sanitizeTitleKeyword, containsThirdPartyBrand } from "../../src/lib/titleOptimizer";
 import { validateApiUrl } from "../utils/security";
+import { assertAuthorizedTitleExcel, authorizeFileCapability } from "../utils/capabilities";
 import { truncatedErrorText } from "../utils/http";
 import { appendLog } from "../utils/logger";
 import { userDataPath } from "../utils/paths";
+import { runWorkerTask } from "../utils/worker";
+import { loadSettings } from "../utils/settings";
 
 let mainWindow: BrowserWindow | null = null;
 
 export function setMainWindow(window: BrowserWindow | null): void {
   mainWindow = window;
 }
-
-// ============================================================================
-// 缓存
-// ============================================================================
-let titleKeywordCache: { filePath: string; mtimeMs: number; data: TitleKeywordData } | null = null;
 
 // ============================================================================
 // 文件选择
@@ -31,6 +30,7 @@ async function selectTitleKeywordExcel(): Promise<SelectPathResult> {
     filters: [{ name: "Excel 工作簿", extensions: ["xlsx", "xlsm"] }]
   } satisfies Electron.OpenDialogOptions;
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+  for (const filePath of result.filePaths) authorizeFileCapability("titleExcel", filePath, new Set([".xlsx", ".xlsm"]));
   return { canceled: result.canceled, paths: result.filePaths };
 }
 
@@ -244,50 +244,14 @@ function parseBlueOceanSheet(worksheet: ExcelJS.Worksheet, categoryMap: Map<stri
 // 主要功能
 // ============================================================================
 async function loadTitleKeywordData(settings: AppSettings): Promise<TitleKeywordData> {
-  const normalized = normalizeSettings(settings);
-  const filePath = normalized.titleKeywordExcelPath || DEFAULT_SETTINGS.titleKeywordExcelPath;
-  if (!filePath || !existsSync(filePath)) throw new Error(`未找到标题关键词 Excel：${filePath || "未设置路径"}`);
-  const stat = await fs.stat(filePath);
-  if (titleKeywordCache && titleKeywordCache.filePath === filePath && titleKeywordCache.mtimeMs === stat.mtimeMs) {
-    return titleKeywordCache.data;
-  }
-
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
-  const warnings: string[] = [];
-  const categoryMap = new Map<string, TitleCategoryData>();
-
-  for (const worksheet of workbook.worksheets) {
-    if (/蓝海/.test(worksheet.name)) parseBlueOceanSheet(worksheet, categoryMap, warnings);
-    else if (/关键词拆解|市场词|市场/.test(worksheet.name)) parseRankedKeywordSheet(worksheet, /拆解/.test(worksheet.name) ? "breakdown" : "market", categoryMap, warnings);
-  }
-
-  const categories = [...categoryMap.values()]
-    .map((category) => {
-      const keywords = dedupeTitleKeywordEntries(category.keywords).sort((a, b) => b.weight - a.weight);
-      const blueOceanWords = dedupeTitleKeywordEntries(category.blueOceanWords).sort((a, b) => b.weight - a.weight);
-      return {
-        ...category,
-        keywords,
-        blueOceanWords,
-        keywordCount: keywords.length + blueOceanWords.length,
-        source: category.source === "blue-ocean" && keywords.length ? ("mixed" as const) : category.source
-      };
-    })
-    .filter((category) => category.keywordCount > 0)
-    .sort((a, b) => b.keywordCount - a.keywordCount);
-
-  if (!categories.length) warnings.push("没有从 Excel 中解析到可用关键词，请检查表头结构。");
-  const data: TitleKeywordData = {
-    excelPath: filePath,
-    loadedAt: new Date().toISOString(),
-    modifiedAt: new Date(stat.mtimeMs).toISOString(),
-    categories,
-    totalKeywords: categories.reduce((sum, category) => sum + category.keywordCount, 0),
-    warnings
-  };
-  titleKeywordCache = { filePath, mtimeMs: stat.mtimeMs, data };
-  return data;
+  const filePath = normalizeSettings(settings).titleKeywordExcelPath || DEFAULT_SETTINGS.titleKeywordExcelPath;
+  assertAuthorizedTitleExcel(filePath);
+  return runWorkerTask<{ action: "load"; settings: AppSettings; cacheDir?: string }, TitleKeywordData>(
+    "titleWorker",
+    { action: "load", settings, cacheDir: path.join(app.getPath("userData"), "title-cache") },
+    undefined,
+    { timeoutMs: 120_000 }
+  );
 }
 
 async function enhanceTitlePoolWithLLM(
@@ -390,6 +354,14 @@ function splitTitleTargetKeywords(value: string): string[] {
 }
 
 async function generateTitleCandidates(settings: AppSettings, payload: TitleGeneratePayload) {
+  if ((payload.strategy ?? "stacked-v2") === "stacked-v2") {
+    return runWorkerTask<{ action: "generate"; settings: AppSettings; payload: TitleGeneratePayload; cacheDir?: string }, ReturnType<typeof generateTitleScore>>(
+      "titleWorker",
+      { action: "generate", settings, payload, cacheDir: path.join(app.getPath("userData"), "title-cache") },
+      undefined,
+      { timeoutMs: 120_000 }
+    );
+  }
   const data = await loadTitleKeywordData(settings);
   const strategy = payload.strategy ?? "stacked-v2";
   const normalized = normalizeSettings(settings);
@@ -399,6 +371,14 @@ async function generateTitleCandidates(settings: AppSettings, payload: TitleGene
 }
 
 async function analyzeTitle(settings: AppSettings, payload: TitleAnalyzePayload) {
+  if ((payload.strategy ?? "stacked-v2") === "stacked-v2") {
+    return runWorkerTask<{ action: "analyze"; settings: AppSettings; payload: TitleAnalyzePayload; cacheDir?: string }, ReturnType<typeof analyzeTitleScore>>(
+      "titleWorker",
+      { action: "analyze", settings, payload, cacheDir: path.join(app.getPath("userData"), "title-cache") },
+      undefined,
+      { timeoutMs: 120_000 }
+    );
+  }
   const data = await loadTitleKeywordData(settings);
   const strategy = payload.strategy ?? "stacked-v2";
   const normalized = normalizeSettings(settings);
@@ -412,8 +392,8 @@ async function analyzeTitle(settings: AppSettings, payload: TitleAnalyzePayload)
  */
 export function register(ipcMain: IpcMain): void {
   ipcMain.handle("title:selectExcel", () => selectTitleKeywordExcel());
-  ipcMain.handle("title:loadKeywordData", (_event, settings: AppSettings) => loadTitleKeywordData(settings));
-  ipcMain.handle("title:analyze", (_event, settings: AppSettings, payload: TitleAnalyzePayload) => analyzeTitle(settings, payload));
-  ipcMain.handle("title:generateCandidates", (_event, settings: AppSettings, payload: TitleGeneratePayload) => generateTitleCandidates(settings, payload));
-  ipcMain.handle("title:enhancePool", (_event, settings: AppSettings, payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }) => enhanceTitlePoolWithLLM(settings, payload));
+  ipcMain.handle("title:loadKeywordData", async () => loadTitleKeywordData(await loadSettings()));
+  ipcMain.handle("title:analyze", async (_event, _settings: AppSettings, payload: TitleAnalyzePayload) => analyzeTitle(await loadSettings(), payload));
+  ipcMain.handle("title:generateCandidates", async (_event, _settings: AppSettings, payload: TitleGeneratePayload) => generateTitleCandidates(await loadSettings(), payload));
+  ipcMain.handle("title:enhancePool", async (_event, _settings: AppSettings, payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }) => enhanceTitlePoolWithLLM(await loadSettings(), payload));
 }

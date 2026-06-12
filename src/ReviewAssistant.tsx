@@ -10,11 +10,23 @@ import { getReviewApiProfile } from "./lib/shared";
 const REVIEW_INITIAL_VISIBLE = 36;
 const REVIEW_LOAD_STEP = 24;
 const REVIEW_THUMBNAIL_BATCH = 18;
+const REVIEW_INITIAL_VISIBLE_LOW = 24;
+const REVIEW_LOAD_STEP_LOW = 16;
+const REVIEW_THUMBNAIL_BATCH_LOW = 10;
+const REVIEW_THUMBNAIL_SIZE = 220;
+const REVIEW_THUMBNAIL_SIZE_LOW = 176;
+const REVIEW_FOLDER_CHILD_LIMIT = 220;
+const REVIEW_FOLDER_CHILD_LIMIT_LOW = 120;
 const RECENT_QUERIES_KEY = "review-recent-queries";
 const MAX_RECENT_QUERIES = 8;
+const CHAT_IMAGE_LIMIT = 8;
+const CHAT_IMAGE_MAX_SIDE = 960;
+const CHAT_IMAGE_INLINE_LIMIT = 900 * 1024;
+const SCAN_PROGRESS_UPDATE_INTERVAL_MS = 250;
 type ReviewSortMode = "name-asc" | "name-desc" | "time-desc" | "time-asc";
 type ReviewFilterMode = "all" | "image" | "folder" | "selected";
 type ReviewThumbSize = "small" | "medium" | "large";
+type ChatQuickAction = "write" | "shorten" | "casual" | "detail" | "compare" | "extract";
 
 interface ReviewSessionState {
   query: string;
@@ -38,24 +50,35 @@ interface ScanProgress {
 
 export function ReviewAssistant({
   settings,
+  resolvedPerformanceMode,
   onSaveSettings,
   showToast,
   modelConnected = false
 }: {
   settings: AppSettings;
+  resolvedPerformanceMode?: Exclude<AppSettings["performanceMode"], "auto">;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
   showToast: (message: string) => void;
   modelConnected?: boolean;
 }) {
+  const performanceMode = settings.performanceMode ?? "auto";
+  const lowPerformance = performanceMode === "low" || (performanceMode === "auto" && resolvedPerformanceMode === "low");
+  const initialVisibleLimit = lowPerformance ? REVIEW_INITIAL_VISIBLE_LOW : REVIEW_INITIAL_VISIBLE;
+  const loadStep = lowPerformance ? REVIEW_LOAD_STEP_LOW : REVIEW_LOAD_STEP;
+  const thumbnailBatchLimit = lowPerformance ? REVIEW_THUMBNAIL_BATCH_LOW : REVIEW_THUMBNAIL_BATCH;
+  const thumbnailSize = lowPerformance ? REVIEW_THUMBNAIL_SIZE_LOW : REVIEW_THUMBNAIL_SIZE;
+  const folderChildLimit = lowPerformance ? REVIEW_FOLDER_CHILD_LIMIT_LOW : REVIEW_FOLDER_CHILD_LIMIT;
+  const scrollBehavior: ScrollBehavior = lowPerformance ? "auto" : "smooth";
   const [query, setQuery] = useState(() => reviewSessionState?.query ?? "");
   const [searched, setSearched] = useState(() => reviewSessionState?.searched ?? false);
   const [searching, setSearching] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
-  const [results, setResults] = useState<ReviewSearchResult[]>(() => reviewSessionState?.results ?? []);
-  const [visibleCount, setVisibleCount] = useState(() => reviewSessionState?.visibleCount ?? REVIEW_INITIAL_VISIBLE);
+  const [results, setResults] = useState<ReviewSearchResult[]>(() => (reviewSessionState?.results ?? []).map(stripReviewThumbnails));
+  const [visibleCount, setVisibleCount] = useState(() => reviewSessionState?.visibleCount ?? initialVisibleLimit);
+  const [thumbnailMap, setThumbnailMap] = useState<Record<string, string>>({});
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<string[]>(() => reviewSessionState?.selected ?? []);
-  const [preview, setPreview] = useState<ReviewSearchResult | null>(() => reviewSessionState?.preview ?? null);
+  const [preview, setPreview] = useState<ReviewSearchResult | null>(() => reviewSessionState?.preview ? stripReviewThumbnails(reviewSessionState.preview) : null);
   const [generating, setGenerating] = useState(false);
   const [copies, setCopies] = useState<string[]>(() => reviewSessionState?.copies ?? []);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -77,8 +100,17 @@ export function ReviewAssistant({
   const [thumbSize, setThumbSize] = useState<ReviewThumbSize>("medium");
   const [isPointerSelecting, setIsPointerSelecting] = useState(false);
   const pointerSelectModeRef = useRef<"select" | "deselect">("select");
+  const pointerSelectionFrameRef = useRef<number>(0);
+  const pointerSelectionDraftRef = useRef<{ add: Set<string>; remove: Set<string>; preview: ReviewSearchResult | null }>({
+    add: new Set(),
+    remove: new Set(),
+    preview: null
+  });
+  const previewFrameRef = useRef<number>(0);
+  const pendingPreviewRef = useRef<ReviewSearchResult | null>(null);
   const [showBackTop, setShowBackTop] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set());
   const [recentQueries, setRecentQueries] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem(RECENT_QUERIES_KEY);
@@ -94,7 +126,8 @@ export function ReviewAssistant({
     mentionValue: settings.reviewMentionValue,
     productDescription: settings.reviewProductDescription,
     targetLength: settings.reviewTargetLength,
-    thinkingMode: settings.reviewThinkingMode
+    thinkingMode: settings.reviewThinkingMode,
+    copyCount: settings.reviewCopyCount ?? 6
   });
   const [chatMessages, setChatMessages] = useState<ReviewChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -106,8 +139,39 @@ export function ReviewAssistant({
   const copyListRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
+  const searchRequestRef = useRef(0);
+  const pendingScanProgressRef = useRef<ScanProgress | null>(null);
+  const scanProgressTimerRef = useRef<number | null>(null);
+  const lastScanProgressPaintRef = useRef(0);
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const selectedImagePaths = useMemo(() => {
+    const byPath = new Map<string, ReviewSearchResult>();
+    const addKnown = (item: ReviewSearchResult) => {
+      byPath.set(item.path, item);
+      item.children?.forEach(addKnown);
+    };
+    results.forEach(addKnown);
+
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    const addPath = (path: string) => {
+      if (!path || seen.has(path)) return;
+      seen.add(path);
+      paths.push(path);
+    };
+
+    for (const path of selected) {
+      const item = byPath.get(path);
+      if (item?.kind === "folder") {
+        item.children?.filter((child) => child.kind === "image").forEach((child) => addPath(child.path));
+      } else {
+        addPath(path);
+      }
+    }
+    return paths;
+  }, [results, selected]);
+  const selectedImageCount = selectedImagePaths.length;
   const sortedResults = useMemo(() => {
     const collator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
     const next = [...results];
@@ -136,33 +200,63 @@ export function ReviewAssistant({
   }, [selectablePaths, visibleResults]);
   const visibleSelectedKeys = useMemo(() => {
     const keys = new Set<string>();
-    visiblePathGroups.forEach((paths, key) => {
-      if (paths.some((path) => selectedSet.has(path))) keys.add(key);
+    visibleResults.forEach((item) => {
+      if (item.kind === "folder") {
+        const childPaths = folderChildPaths(item);
+        if (selectedSet.has(item.path) || childPaths.some((path) => selectedSet.has(path))) keys.add(item.path);
+        childPaths.forEach((path) => {
+          if (selectedSet.has(path)) keys.add(path);
+        });
+        return;
+      }
+      if (selectedSet.has(item.path)) keys.add(item.path);
     });
     return keys;
-  }, [selectedSet, visiblePathGroups]);
+  }, [folderChildPaths, selectedSet, visibleResults]);
   const selectedCardCount = visibleSelectedKeys.size;
   const thumbnailLoadKey = useMemo(() => {
     return visibleResults
       .flatMap((item) => {
-        if (item.kind === "image" && !item.thumbnailDataUrl) return [item.path];
-        if (item.kind === "folder" && item.children) return item.children.filter((c) => !c.thumbnailDataUrl).map((c) => c.path);
+        if (item.kind === "image" && !thumbnailMap[item.path]) return [item.path];
+        if (item.kind === "folder") {
+          if (expandedFolders.has(item.path) && item.children?.length) {
+            return item.children.filter((child) => !thumbnailMap[child.path]).map((child) => child.path);
+          }
+          const coverPath = item.coverPath ?? item.children?.[0]?.path;
+          return coverPath && !thumbnailMap[coverPath] ? [coverPath] : [];
+        }
         return [];
       })
-      .slice(0, REVIEW_THUMBNAIL_BATCH)
+      .slice(0, thumbnailBatchLimit)
       .join("|");
-  }, [visibleResults]);
+  }, [expandedFolders, thumbnailBatchLimit, thumbnailMap, visibleResults]);
+  const previewWithThumbnail = useMemo(
+    () => (preview ? applyReviewThumbnails(preview, thumbnailMap) : null),
+    [preview, thumbnailMap]
+  );
   const rootLabel = settings.reviewRootDir ? compactPath(settings.reviewRootDir) : "尚未选择图片根目录";
   const savedCopies = useMemo(() => settings.reviewSavedCopies ?? [], [settings.reviewSavedCopies]);
 
   useEffect(() => {
     return () => {
       window.clearTimeout(loadMoreTimerRef.current);
+      if (scanProgressTimerRef.current !== null) window.clearTimeout(scanProgressTimerRef.current);
+      if (pointerSelectionFrameRef.current) window.cancelAnimationFrame(pointerSelectionFrameRef.current);
+      if (previewFrameRef.current) window.cancelAnimationFrame(previewFrameRef.current);
     };
   }, []);
 
   useEffect(() => {
-    reviewSessionState = { query, searched, results, visibleCount, selected, preview, copies, batchSeed };
+    reviewSessionState = {
+      query,
+      searched,
+      results: results.map(stripReviewThumbnails),
+      visibleCount,
+      selected,
+      preview: preview ? stripReviewThumbnails(preview) : null,
+      copies,
+      batchSeed
+    };
   }, [batchSeed, copies, preview, query, results, searched, selected, visibleCount]);
 
   useEffect(() => {
@@ -201,9 +295,32 @@ export function ReviewAssistant({
 
   useEffect(() => {
     const off = window.alipayWorkbench.onReviewScanProgress?.((progress) => {
-      setScanProgress(progress);
+      pendingScanProgressRef.current = progress;
+      const elapsed = Date.now() - lastScanProgressPaintRef.current;
+      const delay = progress.phase === "done" ? 0 : Math.max(0, SCAN_PROGRESS_UPDATE_INTERVAL_MS - elapsed);
+      const flush = () => {
+        scanProgressTimerRef.current = null;
+        const next = pendingScanProgressRef.current;
+        pendingScanProgressRef.current = null;
+        if (!next) return;
+        lastScanProgressPaintRef.current = Date.now();
+        setScanProgress(next);
+      };
+      if (delay === 0) {
+        if (scanProgressTimerRef.current !== null) window.clearTimeout(scanProgressTimerRef.current);
+        flush();
+        return;
+      }
+      if (scanProgressTimerRef.current === null) {
+        scanProgressTimerRef.current = window.setTimeout(flush, delay);
+      }
     });
-    return () => off?.();
+    return () => {
+      off?.();
+      if (scanProgressTimerRef.current !== null) window.clearTimeout(scanProgressTimerRef.current);
+      scanProgressTimerRef.current = null;
+      pendingScanProgressRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -211,22 +328,29 @@ export function ReviewAssistant({
     let canceled = false;
     const missingPaths = thumbnailLoadKey.split("|").filter(Boolean);
     if (!missingPaths.length) return;
-    const loader = window.alipayWorkbench.loadReviewThumbnailBatch || window.alipayWorkbench.loadReviewThumbnails;
-    void loader(missingPaths).then((thumbMap: Record<string, string>) => {
+    void loadReviewThumbnailBatch(missingPaths, thumbnailSize).then((thumbMap: Record<string, string>) => {
       if (canceled) return;
-      setResults((prev) =>
-        prev.map((item) => {
-          if (item.kind === "image" && thumbMap[item.path]) return { ...item, thumbnailDataUrl: thumbMap[item.path] };
-          if (item.kind === "folder" && item.children) {
-            const updatedChildren = item.children.map((c) => (thumbMap[c.path] ? { ...c, thumbnailDataUrl: thumbMap[c.path] } : c));
-            return { ...item, children: updatedChildren, thumbnailDataUrl: item.thumbnailDataUrl || updatedChildren[0]?.thumbnailDataUrl };
+      setThumbnailMap((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [path, dataUrl] of Object.entries(thumbMap)) {
+          if (dataUrl && next[path] !== dataUrl) {
+            next[path] = dataUrl;
+            changed = true;
           }
-          return item;
-        })
-      );
+        }
+        return changed ? next : prev;
+      });
     });
     return () => { canceled = true; };
-  }, [searched, thumbnailLoadKey, results.length]);
+  }, [searched, thumbnailLoadKey, results.length, thumbnailSize]);
+
+  async function loadReviewThumbnailBatch(paths: string[], size: number): Promise<Record<string, string>> {
+    if (window.alipayWorkbench.loadReviewThumbnailBatch) {
+      return window.alipayWorkbench.loadReviewThumbnailBatch(paths, size, settings.reviewRootDir);
+    }
+    return window.alipayWorkbench.loadReviewThumbnails(paths);
+  }
 
   function recordRecentQuery(value: string) {
     const trimmed = value.trim();
@@ -282,33 +406,74 @@ export function ReviewAssistant({
     showToast("上下文已清空，可以开始新一轮生成。");
   }
 
-  function handleChatImageFiles(files: FileList | File[]) {
+  async function handleChatImageFiles(files: FileList | File[]) {
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
     if (!imageFiles.length) return;
-    const readers = imageFiles.map((file) => {
-      return new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => resolve("");
-        reader.readAsDataURL(file);
-      });
-    });
-    Promise.all(readers).then((urls) => {
-      const valid = urls.filter(Boolean);
-      setChatUploadedImages((prev) => [...prev, ...valid].slice(0, 8));
-    });
+    const remaining = Math.max(0, CHAT_IMAGE_LIMIT - chatUploadedImages.length);
+    if (!remaining) {
+      showToast(`最多保留 ${CHAT_IMAGE_LIMIT} 张对话参考图。`);
+      return;
+    }
+    const urls = (await Promise.all(imageFiles.slice(0, remaining).map((file) => readChatImageFile(file)))).filter(Boolean);
+    setChatUploadedImages((prev) => [...prev, ...urls].slice(0, CHAT_IMAGE_LIMIT));
+    if (imageFiles.length > remaining) showToast(`已加入 ${remaining} 张图片，最多支持 ${CHAT_IMAGE_LIMIT} 张。`);
   }
 
   function removeChatImage(index: number) {
     setChatUploadedImages((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function sendChatMessage() {
-    if (!chatInput.trim() && !chatUploadedImages.length) return;
-    if (!modelConnected) {
-      showToast("大模型尚未连接，请先检查 API 配置。");
+  async function attachSelectedImagesToChat() {
+    if (!selected.length) {
+      showToast("请先在左侧选择参考图，或直接上传图片。");
       return;
     }
+    const remaining = Math.max(0, CHAT_IMAGE_LIMIT - chatUploadedImages.length);
+    if (!remaining) {
+      showToast(`最多保留 ${CHAT_IMAGE_LIMIT} 张对话参考图。`);
+      return;
+    }
+    const paths = selectedImagePaths.slice(0, remaining);
+    try {
+      const previews = await loadReviewThumbnailBatch(paths, 960);
+      const urls = paths.map((p) => previews[p]).filter(Boolean);
+      if (!urls.length) {
+        showToast("已选图片暂时无法读取预览，请直接上传图片。");
+        return;
+      }
+      setChatUploadedImages((prev) => [...prev, ...urls].slice(0, CHAT_IMAGE_LIMIT));
+      showToast(`已把 ${urls.length} 张已选图片加入对话。`);
+    } catch {
+      showToast("加入已选图片失败，请直接上传图片。");
+    }
+  }
+
+  async function copyChatMessage(text: string) {
+    if (!text.trim()) return;
+    await copyToClipboard(text);
+  }
+
+  function useChatReplyAsCopy(text: string) {
+    if (!text.trim()) return;
+    setCopies((prev) => [text, ...prev.filter((item) => item !== text)].slice(0, 24));
+    showToast("已加入生成文案列表。");
+  }
+
+  function applyChatQuickAction(action: ChatQuickAction, sourceText?: string) {
+    const actions: Record<ChatQuickAction, string> = {
+      write: "请结合商品信息和参考图片，写 6 条真实买家好评，每条都换一个角度。",
+      shorten: "请把上面的好评压缩到 60 字以内，保留真实买家口吻。",
+      casual: "请改得更口语、更像真实买家，不要太书面。",
+      detail: "请强调面料、版型、颜色和上身场景，避免夸张。",
+      compare: "请生成一版带对比感的好评，比如比预期好、比之前买的更合适。",
+      extract: "请先根据图片提炼商品外观卖点，再写成自然好评。"
+    };
+    const suffix = sourceText ? `\n\n参考原文：${sourceText}` : "";
+    setChatInput(actions[action] + suffix);
+  }
+
+  async function sendChatMessage() {
+    if (!chatInput.trim() && !chatUploadedImages.length) return;
     const userMessage: ReviewChatMessage = {
       role: "user",
       content: chatInput.trim() || "请根据这些图片帮我写好评",
@@ -324,8 +489,14 @@ export function ReviewAssistant({
         messages: updatedMessages,
         query,
         images: userMessage.images,
+        productDescription: options.productDescription,
         targetLength: options.targetLength,
         thinkingMode: options.thinkingMode,
+        professionalLevel: options.professionalLevel,
+        buyerLevel: options.buyerLevel,
+        exaggerationLevel: options.exaggerationLevel,
+        sceneLevel: options.sceneLevel,
+        mentionValue: options.mentionValue,
         customPrompt: customPrompt || undefined
       });
       setChatMessages([...updatedMessages, { role: "assistant", content: result.reply }]);
@@ -338,7 +509,7 @@ export function ReviewAssistant({
 
   async function ensureRoot() {
     if (settings.reviewRootDir) return settings.reviewRootDir;
-    const result = await window.alipayWorkbench.selectDirectory("首次使用收评助手：选择图片根目录");
+    const result = await window.alipayWorkbench.selectDirectory("首次使用收评助手：选择图片根目录", "reviewRoot");
     if (result.canceled || !result.paths[0]) return "";
     await onSaveSettings({ ...settings, reviewRootDir: result.paths[0] });
     return result.paths[0];
@@ -357,22 +528,33 @@ export function ReviewAssistant({
     setSearching(true);
     setSearched(true);
     setScanProgress({ scanned: 0, currentDir: "", phase: "start" });
+    const requestSeq = searchRequestRef.current + 1;
+    searchRequestRef.current = requestSeq;
+    const requestId = `review-${Date.now()}-${requestSeq}`;
     try {
-      const found = await window.alipayWorkbench.scanReviewAssets(root, q, settings);
-      setResults(found);
+      const found = await window.alipayWorkbench.scanReviewAssets(root, q, settings, requestId);
+      if (searchRequestRef.current !== requestSeq) return;
+      const stripped = found.map(stripReviewThumbnails);
+      setResults(stripped);
+      setThumbnailMap({});
       setSelected([]);
-      setVisibleCount(REVIEW_INITIAL_VISIBLE);
+      setVisibleCount(initialVisibleLimit);
       setSortMode("time-desc");
       setFilterMode("all");
       setLoadingMore(false);
-      setPreview(found[0] ?? null);
+      setExpandedFolders(new Set());
+      setLoadingFolders(new Set());
+      setPreview(stripped[0] ?? null);
       recordRecentQuery(q);
       showToast(found.length ? `检索到 ${found.length} 个相关图片。` : "没有找到相关图片。");
     } catch (error) {
+      if (searchRequestRef.current !== requestSeq) return;
       showToast(error instanceof Error ? error.message : "检索失败");
     } finally {
-      setSearching(false);
-      window.setTimeout(() => setScanProgress(null), 1200);
+      if (searchRequestRef.current === requestSeq) {
+        setSearching(false);
+        window.setTimeout(() => setScanProgress(null), 1200);
+      }
     }
   }
 
@@ -394,6 +576,45 @@ export function ReviewAssistant({
     }
   }
 
+  function applyPointerSelection(item: ReviewSearchResult, mode = pointerSelectModeRef.current) {
+    const paths = selectablePaths(item);
+    const draft = pointerSelectionDraftRef.current;
+    for (const path of paths) {
+      if (mode === "select") {
+        draft.add.add(path);
+        draft.remove.delete(path);
+      } else {
+        draft.remove.add(path);
+        draft.add.delete(path);
+      }
+    }
+    draft.preview = item;
+    if (pointerSelectionFrameRef.current) return;
+    pointerSelectionFrameRef.current = window.requestAnimationFrame(() => {
+      pointerSelectionFrameRef.current = 0;
+      const nextDraft = pointerSelectionDraftRef.current;
+      pointerSelectionDraftRef.current = { add: new Set(), remove: new Set(), preview: null };
+      setSelected((prev) => {
+        const prevSet = new Set(prev);
+        nextDraft.remove.forEach((path) => prevSet.delete(path));
+        nextDraft.add.forEach((path) => prevSet.add(path));
+        return [...prevSet];
+      });
+      if (nextDraft.preview) setPreview(nextDraft.preview);
+    });
+  }
+
+  function schedulePreview(item: ReviewSearchResult) {
+    pendingPreviewRef.current = item;
+    if (previewFrameRef.current) return;
+    previewFrameRef.current = window.requestAnimationFrame(() => {
+      previewFrameRef.current = 0;
+      const next = pendingPreviewRef.current;
+      pendingPreviewRef.current = null;
+      if (next) setPreview(next);
+    });
+  }
+
   function toggle(item: ReviewSearchResult) {
     const paths = visiblePathGroups.get(item.path) ?? selectablePaths(item);
     setSelected((prev) => {
@@ -401,17 +622,7 @@ export function ReviewAssistant({
       const allSelected = paths.every((path) => prevSet.has(path));
       return allSelected ? prev.filter((path) => !paths.includes(path)) : [...new Set([...prev, ...paths])];
     });
-  }
-
-  function applyPointerSelection(item: ReviewSearchResult, mode = pointerSelectModeRef.current) {
-    const paths = selectablePaths(item);
-    setSelected((prev) => {
-      const prevSet = new Set(prev);
-      if (mode === "select") paths.forEach((path) => prevSet.add(path));
-      else paths.forEach((path) => prevSet.delete(path));
-      return [...prevSet];
-    });
-    setPreview(item);
+    schedulePreview(item);
   }
 
   function beginPointerSelection(item: ReviewSearchResult) {
@@ -422,11 +633,52 @@ export function ReviewAssistant({
     applyPointerSelection(item, allSelected ? "deselect" : "select");
   }
 
-  function selectFolderChildren(item: ReviewSearchResult) {
-    const paths = folderChildPaths(item);
+  async function loadFolderChildrenPage(item: ReviewSearchResult, append = false): Promise<ReviewSearchResult> {
+    if (item.kind !== "folder") return item;
+    if (!settings.reviewRootDir || !window.alipayWorkbench.loadReviewFolderChildren) return item;
+    const existingChildren = append ? (item.children ?? []) : [];
+    const totalChildren = item.childCount ?? existingChildren.length;
+    if (append && totalChildren > 0 && existingChildren.length >= totalChildren) return item;
+    setLoadingFolders((prev) => new Set(prev).add(item.path));
+    try {
+      const offset = append ? existingChildren.length : 0;
+      const children = (await window.alipayWorkbench.loadReviewFolderChildren(settings.reviewRootDir, item.path, offset, folderChildLimit))
+        .map(stripReviewThumbnails);
+      const mergedChildren = append ? [...existingChildren, ...children] : children;
+      const childCount = item.childCount ?? mergedChildren.length;
+      const loaded: ReviewSearchResult = {
+        ...item,
+        children: mergedChildren,
+        childrenLoaded: children.length === 0 || mergedChildren.length >= childCount,
+        childCount
+      };
+      setResults((prev) => replaceReviewResult(prev, item.path, loaded));
+      setPreview((prev) => prev?.path === item.path ? loaded : prev);
+      return loaded;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "加载文件夹图片失败");
+      return item;
+    } finally {
+      setLoadingFolders((prev) => {
+        const next = new Set(prev);
+        next.delete(item.path);
+        return next;
+      });
+    }
+  }
+
+  async function ensureFolderChildren(item: ReviewSearchResult): Promise<ReviewSearchResult> {
+    if (item.kind !== "folder") return item;
+    if ((item.children?.length ?? 0) > 0 || item.childrenLoaded) return item;
+    return loadFolderChildrenPage(item, false);
+  }
+
+  async function selectFolderChildren(item: ReviewSearchResult) {
+    const loaded = await ensureFolderChildren(item);
+    const paths = folderChildPaths(loaded);
     if (!paths.length) return;
     setSelected((prev) => [...new Set([...prev, ...paths])]);
-    setPreview(item);
+    setPreview(loaded);
     showToast(`已选中文件夹内 ${paths.length} 张图片。`);
   }
 
@@ -435,13 +687,24 @@ export function ReviewAssistant({
     setSelected([...new Set(all)]);
   }
 
-  function toggleExpand(folderPath: string) {
+  async function toggleExpand(item: ReviewSearchResult) {
+    if (item.kind !== "folder") return;
+    const folderPath = item.path;
+    const isExpanded = expandedFolders.has(folderPath);
     setExpandedFolders((prev) => {
       const next = new Set(prev);
-      if (next.has(folderPath)) next.delete(folderPath);
+      if (isExpanded) next.delete(folderPath);
       else next.add(folderPath);
       return next;
     });
+    if (!isExpanded && !item.childrenLoaded) {
+      await ensureFolderChildren(item);
+    }
+  }
+
+  async function loadMoreFolderChildren(item: ReviewSearchResult) {
+    const loaded = await loadFolderChildrenPage(item, true);
+    setPreview(loaded);
   }
 
   function dragPathsFor(item: ReviewSearchResult) {
@@ -454,35 +717,32 @@ export function ReviewAssistant({
     setLoadingMore(true);
     window.clearTimeout(loadMoreTimerRef.current);
     loadMoreTimerRef.current = window.setTimeout(() => {
-      setVisibleCount((count) => Math.min(count + REVIEW_LOAD_STEP, results.length));
+      setVisibleCount((count) => Math.min(count + loadStep, results.length));
       setLoadingMore(false);
     }, 90);
   }
 
   async function pickRoot() {
-    const result = await window.alipayWorkbench.selectDirectory("选择收评助手图片根目录");
+    const result = await window.alipayWorkbench.selectDirectory("选择收评助手图片根目录", "reviewRoot");
     if (result.canceled || !result.paths[0]) return;
     await onSaveSettings({ ...settings, reviewRootDir: result.paths[0] });
     showToast("收评助手根目录已更新。");
   }
 
   async function generate(nextBatch = false) {
-    if (!selected.length && mode !== "ai") {
+    const selectedReferencePaths = selectedImagePaths;
+    if (!selectedReferencePaths.length && mode !== "ai") {
       showToast("请先选择至少一张参考图片。");
-      return;
-    }
-    if (!modelConnected) {
-      showToast("大模型尚未连接，请先在设置中测试连接。");
       return;
     }
     const seed = nextBatch ? batchSeed + 1 : batchSeed;
     setBatchSeed(seed);
     setGenerating(true);
-    requestAnimationFrame(() => copyListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    requestAnimationFrame(() => copyListRef.current?.scrollIntoView({ behavior: scrollBehavior, block: "start" }));
     try {
       const payload: ReviewGenerationOptions = {
         query,
-        selectedPaths: selected,
+        selectedPaths: selectedReferencePaths,
         productDescription: options.productDescription,
         targetLength: options.targetLength,
         thinkingMode: options.thinkingMode,
@@ -491,11 +751,12 @@ export function ReviewAssistant({
         exaggerationLevel: options.exaggerationLevel,
         sceneLevel: options.sceneLevel,
         mentionValue: options.mentionValue,
+        copyCount: options.copyCount,
         batchSeed: seed
       };
       const result = await window.alipayWorkbench.generateReviewCopy(settings, payload);
       setCopies(result.copies);
-      requestAnimationFrame(() => copyListRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+      requestAnimationFrame(() => copyListRef.current?.scrollIntoView({ behavior: scrollBehavior, block: "nearest" }));
       await onSaveSettings({
         ...settings,
         reviewProfessionalLevel: options.professionalLevel,
@@ -505,7 +766,8 @@ export function ReviewAssistant({
         reviewMentionValue: options.mentionValue,
         reviewProductDescription: options.productDescription,
         reviewTargetLength: options.targetLength,
-        reviewThinkingMode: options.thinkingMode
+        reviewThinkingMode: options.thinkingMode,
+        reviewCopyCount: options.copyCount
       });
     } catch (error) {
       showToast(error instanceof Error ? error.message : "AI 生成失败");
@@ -606,7 +868,7 @@ export function ReviewAssistant({
         <div className="review-v2-workspace">
           <div className="review-v2-results-col">
             <ReviewToolbar
-              selectedImages={selected.length}
+              selectedImages={selectedImageCount}
               selectedCards={selectedCardCount}
               totalResults={results.length}
               visibleCount={Math.min(visibleCount, results.length)}
@@ -627,13 +889,16 @@ export function ReviewAssistant({
               items={visibleResults}
               selectedKeys={visibleSelectedKeys}
               expandedFolders={expandedFolders}
+              loadingFolders={loadingFolders}
               onToggleExpand={toggleExpand}
               onToggle={(item) => { toggle(item); setPreview(item); }}
               onPointerSelect={beginPointerSelection}
               onPointerEnterSelect={(item) => { if (isPointerSelecting) applyPointerSelection(item); }}
               onSelectFolderChildren={selectFolderChildren}
+              onLoadMoreFolderChildren={loadMoreFolderChildren}
               onPreview={setPreview}
               dragPathsFor={dragPathsFor}
+              thumbnailMap={thumbnailMap}
               thumbSize={thumbSize}
             />
 
@@ -645,7 +910,7 @@ export function ReviewAssistant({
             )}
           </div>
 
-          <ReviewPreviewPanel preview={preview} selectedImages={selected.length} selectedCards={selectedCardCount} />
+          <ReviewPreviewPanel preview={previewWithThumbnail} selectedImages={selectedImageCount} selectedCards={selectedCardCount} />
         </div>
       )}
 
@@ -665,6 +930,10 @@ export function ReviewAssistant({
           onModelChange={(id) => void handleModelChange(id)}
           loadingModels={loadingModels}
           onLoadModels={() => void loadModels()}
+          generating={generating}
+          canGenerateNextBatch={copies.length > 0}
+          onGenerate={() => void generate()}
+          onGenerateNext={() => void generate(true)}
           onClearContext={clearContext}
           hotkey={settings.reviewGenerateHotkey || "Ctrl+Enter"}
           onSaveHotkey={(value) => void saveHotkey(value)}
@@ -676,9 +945,24 @@ export function ReviewAssistant({
           onSend={() => void sendChatMessage()}
           onImageFiles={handleChatImageFiles}
           onRemoveImage={removeChatImage}
+          selectedImageCount={selectedImageCount}
+          onAttachSelectedImages={() => void attachSelectedImagesToChat()}
+          onCopyMessage={(text) => void copyChatMessage(text)}
+          onUseReplyAsCopy={useChatReplyAsCopy}
+          onQuickAction={applyChatQuickAction}
           chatFileInputRef={chatFileInputRef}
           chatDropRef={chatDropRef}
         />
+      )}
+
+      {(mode === "ai" || mode === "mixed") && generating && (
+        <section className="review-v2-copy-section review-v2-generating" ref={copyListRef}>
+          <div className="review-v2-loading">
+            <div className="review-v2-spinner" />
+            <p>正在生成文案…</p>
+            <span>会尽量按你当前的图片、字数和风格设置输出。</span>
+          </div>
+        </section>
       )}
 
       {(mode === "ai" || mode === "mixed") && copies.length > 0 && (
@@ -711,7 +995,7 @@ export function ReviewAssistant({
       )}
     </section>
     {showBackTop && (
-      <button className="review-v2-back-top" onClick={() => { const container = document.querySelector("main.main"); if (container) container.scrollTo({ top: 0, behavior: "smooth" }); else topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }} title="回到顶部" aria-label="回到顶部">
+      <button className="review-v2-back-top" onClick={() => { const container = document.querySelector("main.main"); if (container) container.scrollTo({ top: 0, behavior: scrollBehavior }); else topRef.current?.scrollIntoView({ behavior: scrollBehavior, block: "start" }); }} title="回到顶部" aria-label="回到顶部">
         <ArrowUp size={16} />
       </button>
     )}
@@ -911,7 +1195,6 @@ function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCou
           <option value="name-desc">文件名 Z-A</option>
         </select>
         {selectedImages > 0 && (<><span className="review-v2-selected-chip review-v2-selected-chip-readable"><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span><span className="review-v2-drag-hint">拖拽缩略图即可同时移动全部所选</span><button className="review-v2-toolbar-btn" onClick={onClear} title="清空当前内容">清空选中</button></>)}
-        {selectedImages > 0 && <button className="review-v2-toolbar-btn" onClick={onClear} title="清空当前内容">取消全选</button>}
         {totalResults > 0 && <button className="review-v2-toolbar-btn" onClick={onSelectAll} title="选择当前搜索结果中的全部图片">全选可见</button>}
       </div>
     </div>
@@ -922,41 +1205,77 @@ function ReviewEmptyState({ query }: { query: string }) {
   return <div className="review-v2-empty"><ImageIcon size={48} /><strong>{query ? "没有找到“" + query + "”相关图片" : "未搜索"}</strong><span>试试换个关键词，或检查图片根目录是否正确。</span></div>;
 }
 
-function ReviewResultGrid({ items, selectedKeys, expandedFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onPreview, dragPathsFor, thumbSize = "medium" }: { items: ReviewSearchResult[]; selectedKeys: Set<string>; expandedFolders: Set<string>; onToggleExpand: (path: string) => void; onToggle: (item: ReviewSearchResult) => void; onPointerSelect: (item: ReviewSearchResult) => void; onPointerEnterSelect: (item: ReviewSearchResult) => void; onSelectFolderChildren: (item: ReviewSearchResult) => void; onPreview: (item: ReviewSearchResult) => void; dragPathsFor: (item: ReviewSearchResult) => string[]; thumbSize?: ReviewThumbSize; }) {
+interface ReviewResultGridProps {
+  items: ReviewSearchResult[];
+  selectedKeys: Set<string>;
+  expandedFolders: Set<string>;
+  loadingFolders: Set<string>;
+  onToggleExpand: (item: ReviewSearchResult) => void | Promise<void>;
+  onToggle: (item: ReviewSearchResult) => void;
+  onPointerSelect: (item: ReviewSearchResult) => void;
+  onPointerEnterSelect: (item: ReviewSearchResult) => void;
+  onSelectFolderChildren: (item: ReviewSearchResult) => void | Promise<void>;
+  onLoadMoreFolderChildren: (item: ReviewSearchResult) => void | Promise<void>;
+  onPreview: (item: ReviewSearchResult) => void;
+  dragPathsFor: (item: ReviewSearchResult) => string[];
+  thumbnailMap: Record<string, string>;
+  thumbSize?: ReviewThumbSize;
+}
+
+function ReviewResultGrid({ items, selectedKeys, expandedFolders, loadingFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onLoadMoreFolderChildren, onPreview, dragPathsFor, thumbnailMap, thumbSize = "medium" }: ReviewResultGridProps) {
   return (
     <div className="review-v2-grid" data-thumb-size={thumbSize}>
       {items.map((item) => {
         const isFolder = item.kind === "folder";
         const isSelected = selectedKeys.has(item.path);
         const isExpanded = isFolder && expandedFolders.has(item.path);
+        const folderChildCount = item.childCount ?? item.children?.length ?? 0;
+        const loadedChildCount = item.children?.length ?? 0;
+        const hasMoreFolderChildren = isFolder && folderChildCount > loadedChildCount;
+        const isLoadingFolder = isFolder && loadingFolders.has(item.path);
+        const folderCover = isFolder ? thumbnailMap[item.coverPath ?? ""] ?? item.children?.map((child) => thumbnailMap[child.path]).find(Boolean) : undefined;
+        const thumbDataUrl = item.thumbnailDataUrl ?? thumbnailMap[item.path] ?? folderCover;
         return (
           <Fragment key={item.path}>
             <button className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
               <div className="review-v2-thumb">
-                {item.thumbnailDataUrl ? <img src={item.thumbnailDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
-                {isFolder && item.children && item.children.length > 1 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {item.children.length}</span>}
-                {isFolder && item.children && item.children.length > 0 && (
-                  <button className={clsx("review-v2-expand-btn", isExpanded && "expanded")} onClick={(e) => { e.stopPropagation(); onToggleExpand(item.path); }} title={isExpanded ? "折叠" : "展开"}>
-                    <ChevronDown size={14} />
+                {thumbDataUrl ? <img src={thumbDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
+                {isFolder && folderChildCount > 0 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {folderChildCount}</span>}
+                {isFolder && folderChildCount > 0 && (
+                  <button className={clsx("review-v2-expand-btn", isExpanded && "expanded")} disabled={isLoadingFolder} onClick={(e) => { e.stopPropagation(); void onToggleExpand(item); }} title={isExpanded ? "折叠" : "展开"}>
+                    {isLoadingFolder ? <Loader2 className="spin" size={14} /> : <ChevronDown size={14} />}
                   </button>
                 )}
                 {isSelected && <span className="review-v2-check"><Check size={14} /></span>}
               </div>
               <strong className="review-v2-name">{item.name}</strong><em className="review-v2-reason">{item.reason}</em>
-              {isFolder && item.children?.length ? <span className="review-v2-folder-select" onClick={(event) => { event.stopPropagation(); onSelectFolderChildren(item); }}>选中整个文件夹</span> : null}
+              {isFolder && folderChildCount > 0 ? <span className="review-v2-folder-select" onClick={(event) => { event.stopPropagation(); void onSelectFolderChildren(item); }}>{loadedChildCount > 0 ? `选中已加载 ${loadedChildCount}` : "加载并选中"}</span> : null}
             </button>
+            {isExpanded && isLoadingFolder && <div className="review-v2-card review-v2-child-card review-v2-folder-loading"><Loader2 className="spin" size={18} /><strong>正在加载文件夹图片</strong></div>}
+            {isExpanded && loadedChildCount > 0 && (
+              <div className="review-v2-folder-page-note">
+                已加载 {loadedChildCount} / {folderChildCount} 张
+              </div>
+            )}
             {isExpanded && item.children?.map((child) => {
               const childSelected = selectedKeys.has(child.path);
+              const childThumbDataUrl = child.thumbnailDataUrl ?? thumbnailMap[child.path];
               return (
                 <button key={child.path} className={clsx("review-v2-card review-v2-child-card", childSelected && "selected")} draggable onClick={() => onToggle(child)} onPointerDown={() => onPreview(child)} onPointerEnter={() => onPointerEnterSelect(child)} onMouseEnter={() => onPreview(child)} onDragStart={(event) => { const paths = dragPathsFor(child); onPreview(child); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
                   <div className="review-v2-thumb">
-                    {child.thumbnailDataUrl ? <img src={child.thumbnailDataUrl} alt={child.name} /> : <ImageIcon size={24} />}
+                    {childThumbDataUrl ? <img src={childThumbDataUrl} alt={child.name} /> : <ImageIcon size={24} />}
                     {childSelected && <span className="review-v2-check"><Check size={14} /></span>}
                   </div>
                   <strong className="review-v2-name">{child.name}</strong><em className="review-v2-reason">{child.reason}</em>
                 </button>
               );
             })}
+            {isExpanded && hasMoreFolderChildren && (
+              <button className="review-v2-folder-more" disabled={isLoadingFolder} onClick={() => void onLoadMoreFolderChildren(item)} title="继续加载这个文件夹中的图片">
+                {isLoadingFolder ? <Loader2 className="spin" size={14} /> : <ChevronDown size={14} />}
+                继续加载（剩余 {folderChildCount - loadedChildCount} 张）
+              </button>
+            )}
           </Fragment>
         );
       })}
@@ -970,21 +1289,135 @@ function ReviewPreviewPanel({ preview, selectedImages, selectedCards }: { previe
       <div className="review-v2-preview-image">{preview?.thumbnailDataUrl ? <img src={preview.thumbnailDataUrl} alt={preview.name} /> : <div className="review-v2-preview-empty"><ImageIcon size={32} /><span>选择图片后预览</span></div>}</div>
       <div className="review-v2-preview-info">
         <strong>{preview?.name || "未选择"}</strong><span>{preview?.path || ""}</span>
-        {preview?.kind === "folder" && preview.children && <em>文件夹包含 {preview.children.length} 张图</em>}
+        {preview?.kind === "folder" && <em>文件夹包含 {preview.childCount ?? preview.children?.length ?? 0} 张图</em>}
         <div className="review-v2-preview-stats"><span><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span></div>
       </div>
     </aside>
   );
 }
 
-function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, setCustomPrompt, onSaveCustomPrompt, advancedOpen, setAdvancedOpen, availableModels, selectedModelId, onModelChange, loadingModels, onLoadModels, onClearContext, hotkey, onSaveHotkey, chatMessages, chatInput, setChatInput, chatUploadedImages, chatting, onSend, onImageFiles, onRemoveImage, chatFileInputRef, chatDropRef }: { query: string; setQuery: (value: string) => void; options: { professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }; setOptions: React.Dispatch<React.SetStateAction<{ professionalLevel: number; buyerLevel: number; exaggerationLevel: number; sceneLevel: number; mentionValue: boolean; productDescription: string; targetLength: number; thinkingMode: ReviewThinkingMode; }>>; customPrompt: string; setCustomPrompt: (v: string) => void; onSaveCustomPrompt: () => void; advancedOpen: boolean; setAdvancedOpen: (v: boolean) => void; availableModels: { id: string; name: string }[]; selectedModelId: string; onModelChange: (id: string) => void; loadingModels: boolean; onLoadModels: () => void; onClearContext: () => void; hotkey: string; onSaveHotkey: (value: string) => void; chatMessages: ReviewChatMessage[]; chatInput: string; setChatInput: (v: string) => void; chatUploadedImages: string[]; chatting: boolean; onSend: () => void; onImageFiles: (files: FileList | File[]) => void; onRemoveImage: (index: number) => void; chatFileInputRef: React.RefObject<HTMLInputElement>; chatDropRef: React.RefObject<HTMLDivElement>; }) {
+interface ReviewAIPanelOptions {
+  professionalLevel: number;
+  buyerLevel: number;
+  exaggerationLevel: number;
+  sceneLevel: number;
+  mentionValue: boolean;
+  productDescription: string;
+  targetLength: number;
+  thinkingMode: ReviewThinkingMode;
+  copyCount: number;
+}
+
+interface ReviewAIPanelProps {
+  query: string;
+  setQuery: (value: string) => void;
+  options: ReviewAIPanelOptions;
+  setOptions: React.Dispatch<React.SetStateAction<ReviewAIPanelOptions>>;
+  customPrompt: string;
+  setCustomPrompt: (v: string) => void;
+  onSaveCustomPrompt: () => void;
+  advancedOpen: boolean;
+  setAdvancedOpen: (v: boolean) => void;
+  availableModels: { id: string; name: string }[];
+  selectedModelId: string;
+  onModelChange: (id: string) => void;
+  loadingModels: boolean;
+  onLoadModels: () => void;
+  generating: boolean;
+  canGenerateNextBatch: boolean;
+  onGenerate: () => void;
+  onGenerateNext: () => void;
+  onClearContext: () => void;
+  hotkey: string;
+  onSaveHotkey: (value: string) => void;
+  chatMessages: ReviewChatMessage[];
+  chatInput: string;
+  setChatInput: (v: string) => void;
+  chatUploadedImages: string[];
+  chatting: boolean;
+  onSend: () => void;
+  onImageFiles: (files: FileList | File[]) => void | Promise<void>;
+  onRemoveImage: (index: number) => void;
+  selectedImageCount: number;
+  onAttachSelectedImages: () => void;
+  onCopyMessage: (text: string) => void;
+  onUseReplyAsCopy: (text: string) => void;
+  onQuickAction: (action: ChatQuickAction, sourceText?: string) => void;
+  chatFileInputRef: React.RefObject<HTMLInputElement>;
+  chatDropRef: React.RefObject<HTMLDivElement>;
+}
+
+function ReviewAIPanel({
+  query,
+  setQuery,
+  options,
+  setOptions,
+  customPrompt,
+  setCustomPrompt,
+  onSaveCustomPrompt,
+  advancedOpen,
+  setAdvancedOpen,
+  availableModels,
+  selectedModelId,
+  onModelChange,
+  loadingModels,
+  onLoadModels,
+  generating,
+  canGenerateNextBatch,
+  onGenerate,
+  onGenerateNext,
+  onClearContext,
+  hotkey,
+  onSaveHotkey,
+  chatMessages,
+  chatInput,
+  setChatInput,
+  chatUploadedImages,
+  chatting,
+  onSend,
+  onImageFiles,
+  onRemoveImage,
+  selectedImageCount,
+  onAttachSelectedImages,
+  onCopyMessage,
+  onUseReplyAsCopy,
+  onQuickAction,
+  chatFileInputRef,
+  chatDropRef
+}: ReviewAIPanelProps) {
   const [dragOver, setDragOver] = useState(false);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const quickActions: Array<{ key: ChatQuickAction; label: string }> = [
+    { key: "write", label: "写 6 条" },
+    { key: "extract", label: "先看图" },
+    { key: "casual", label: "更口语" },
+    { key: "shorten", label: "压短" },
+    { key: "detail", label: "强调细节" },
+    { key: "compare", label: "带对比" }
+  ];
+  const thinkingLabel = options.thinkingMode === "on" ? "深度" : options.thinkingMode === "auto" ? "自动" : "关闭";
+
+  function applyQuick(action: ChatQuickAction, sourceText?: string) {
+    onQuickAction(action, sourceText);
+    window.requestAnimationFrame(() => textAreaRef.current?.focus());
+  }
+
+  function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (files.length) void onImageFiles(files);
+  }
+
   return (
     <section className="review-v2-chat-panel">
       <div className="review-v2-ai-head">
-        <WandSparkles size={18} />
-        <strong>AI 对话写好评</strong>
-        <span className="review-v2-ai-tag">多轮对话</span>
+        <div className="review-v2-ai-title">
+          <WandSparkles size={18} />
+          <div>
+            <strong>AI 对话写好评</strong>
+            <span>多轮对话 · 图片参考 · 快捷改写</span>
+          </div>
+        </div>
+        <span className="review-v2-ai-tag">Chat</span>
         <div className="review-v2-ai-model">
           <select value={selectedModelId} onChange={(e) => onModelChange(e.target.value)}>
             {availableModels.length === 0 && <option value={selectedModelId}>{selectedModelId || "未选择模型"}</option>}
@@ -994,16 +1427,44 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
         </div>
       </div>
 
+      <div className="review-v2-chat-context">
+        <span><Sparkles size={12} /> {query || "未填写商品词"}</span>
+        <span>{options.targetLength} 字</span>
+        <span>思考：{thinkingLabel}</span>
+        <span>{selectedImageCount} 张已选图</span>
+        <button onClick={onAttachSelectedImages} disabled={!selectedImageCount || chatUploadedImages.length >= CHAT_IMAGE_LIMIT} title="把左侧已选参考图加入对话">
+          <ImageIcon size={13} /> 引用已选图
+        </button>
+      </div>
+
       <div className="review-v2-chat-messages">
         {chatMessages.length === 0 && (
           <div className="review-v2-chat-empty">
             <WandSparkles size={32} />
             <strong>AI 对话写好评</strong>
             <span>输入商品名称和需求，AI 帮你写出优质好评。支持上传图片作为参考。</span>
+            <div className="review-v2-chat-empty-actions">
+              <button onClick={() => chatFileInputRef.current?.click()} title="上传图片">
+                <ImageIcon size={15} /> 上传图片
+              </button>
+              <button onClick={() => applyQuick("write")} title="填入写好评指令">
+                <Sparkles size={15} /> 写一组好评
+              </button>
+            </div>
           </div>
         )}
         {chatMessages.map((msg, i) => (
           <div key={i} className={clsx("review-v2-chat-bubble", msg.role)}>
+            <div className="review-v2-chat-bubble-meta">
+              <span>{msg.role === "assistant" ? "AI" : "你"}</span>
+              <button onClick={() => onCopyMessage(msg.content)} title="复制这条消息"><Copy size={12} /></button>
+              {msg.role === "assistant" && (
+                <>
+                  <button onClick={() => onUseReplyAsCopy(msg.content)} title="加入生成文案列表"><Check size={12} /></button>
+                  <button onClick={() => applyQuick("casual", msg.content)} title="基于这条回复继续改写"><Edit3 size={12} /></button>
+                </>
+              )}
+            </div>
             <div className="review-v2-chat-bubble-content">
               {msg.images && msg.images.length > 0 && (
                 <div className="review-v2-chat-bubble-images">
@@ -1036,6 +1497,28 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
         </div>
       )}
 
+      <div className="review-v2-chat-prompts">
+        {quickActions.map((action) => (
+          <button key={action.key} onClick={() => applyQuick(action.key)} title="填入快捷写作要求">
+            {action.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="review-v2-buttons">
+        <button className="review-v2-primary" onClick={onGenerate} disabled={generating} title="按当前参数批量生成文案">
+          {generating ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
+          {generating ? "生成中…" : `生成 ${options.copyCount} 条文案`}
+        </button>
+        <button className="review-v2-secondary" onClick={onGenerateNext} disabled={generating || !canGenerateNextBatch} title="沿用当前参数换一批新文案">
+          <RefreshCw size={15} />
+          再来一批
+        </button>
+        <span className="review-v2-gen-status">
+          {generating ? <><Loader2 className="spin" size={14} /> 正在整理文案角度和语气</> : <><Keyboard size={13} /> 快捷键 {hotkey}</>}
+        </span>
+      </div>
+
       <div
         ref={chatDropRef}
         className={clsx("review-v2-chat-input-area", dragOver && "drag-over")}
@@ -1054,13 +1537,16 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
         <button className="review-v2-chat-image-btn" onClick={() => chatFileInputRef.current?.click()} title="上传图片">
           <ImageIcon size={16} />
         </button>
-        <input
+        <textarea
+          ref={textAreaRef}
           className="review-v2-chat-input"
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
+          onPaste={handlePaste}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
-          placeholder={dragOver ? "释放以上传图片" : "输入消息，Enter 发送，Shift+Enter 换行"}
+          placeholder={dragOver ? "释放以上传图片" : "输入商品和要求，Enter 发送，Shift+Enter 换行"}
           disabled={chatting}
+          rows={2}
         />
         <button className="review-v2-chat-send" onClick={onSend} disabled={chatting || (!chatInput.trim() && !chatUploadedImages.length)} title="发送当前 AI 对话消息">
           {chatting ? <Loader2 className="spin" size={16} /> : <ArrowUp size={16} />}
@@ -1080,6 +1566,7 @@ function ReviewAIPanel({ query, setQuery, options, setOptions, customPrompt, set
             <SliderCompact label="买家味" value={options.buyerLevel} onChange={(v) => setOptions((p) => ({ ...p, buyerLevel: v }))} />
             <SliderCompact label="夸张度" value={options.exaggerationLevel} onChange={(v) => setOptions((p) => ({ ...p, exaggerationLevel: v }))} />
             <SliderCompact label="场景化" value={options.sceneLevel} onChange={(v) => setOptions((p) => ({ ...p, sceneLevel: v }))} />
+            <SliderCompact label="文案数量" value={options.copyCount} onChange={(v) => setOptions((p) => ({ ...p, copyCount: v }))} min={3} max={12} />
             <label className="review-v2-toggle"><span>性价比</span><input type="checkbox" checked={options.mentionValue} onChange={(e) => setOptions((p) => ({ ...p, mentionValue: e.target.checked }))} /><span className="review-v2-toggle-track"><span className="review-v2-toggle-thumb" /></span></label>
           </div>
           <div className="review-v2-thinking-row"><label><span>思考模式</span><select value={options.thinkingMode} onChange={(e) => setOptions((p) => ({ ...p, thinkingMode: e.target.value as ReviewThinkingMode }))}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label></div>
@@ -1106,14 +1593,93 @@ function ReviewSavedCopies({ savedCopies, open, onToggle, onCopy, onRemove }: { 
   return <section className={clsx("review-v2-saved", open && "open")}><button className="review-v2-saved-toggle" onClick={onToggle} title="展开或收起收藏文案"><Star size={14} /><strong>我的收藏文案（{savedCopies.length}）</strong><ChevronDown size={14} className={clsx("review-v2-chev", open && "open")} /></button>{open && <div className="review-v2-saved-list">{savedCopies.map((text, i) => <article key={i + '-' + text.slice(0, 6)} className="review-v2-saved-card"><span onClick={() => onCopy(text)}>{text}</span><button className="review-v2-copy-action" onClick={() => onRemove(text)} title="删除"><Trash2 size={13} /></button></article>)}</div>}</section>;
 }
 
-function SliderCompact({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
-  return <label className="review-v2-slider"><span className="review-v2-slider-label">{label}</span><input type="range" min={0} max={5} value={value} onChange={(event) => onChange(Number(event.target.value))} /><em className="review-v2-slider-value">{value}</em></label>;
+function SliderCompact({ label, value, onChange, min = 0, max = 5 }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number }) {
+  return <label className="review-v2-slider"><span className="review-v2-slider-label">{label}</span><input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} /><em className="review-v2-slider-value">{value}</em></label>;
+}
+
+function readChatImageFile(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve("");
+    reader.onload = () => {
+      const originalUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!originalUrl) {
+        resolve("");
+        return;
+      }
+
+      const image = new Image();
+      image.onload = () => {
+        const maxSourceSide = Math.max(image.naturalWidth, image.naturalHeight);
+        if (!maxSourceSide || (maxSourceSide <= CHAT_IMAGE_MAX_SIDE && file.size <= CHAT_IMAGE_INLINE_LIMIT)) {
+          resolve(originalUrl);
+          return;
+        }
+
+        const scale = Math.min(1, CHAT_IMAGE_MAX_SIDE / maxSourceSide);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext("2d");
+        if (!context) {
+          resolve(originalUrl);
+          return;
+        }
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.86));
+      };
+      image.onerror = () => resolve(originalUrl);
+      image.src = originalUrl;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function compactPath(value: string) {
   const parts = value.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 3) return value;
   return parts[0] + "\\...\\" + parts.slice(-2).join("\\");
+}
+
+function stripReviewThumbnails(item: ReviewSearchResult): ReviewSearchResult {
+  const { thumbnailDataUrl: _thumbnailDataUrl, children, ...rest } = item;
+  return {
+    ...rest,
+    ...(children ? { children: children.map(stripReviewThumbnails) } : {})
+  };
+}
+
+function replaceReviewResult(items: ReviewSearchResult[], path: string, replacement: ReviewSearchResult): ReviewSearchResult[] {
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.path === path) {
+      changed = true;
+      return replacement;
+    }
+    if (item.children?.length) {
+      const children = replaceReviewResult(item.children, path, replacement);
+      if (children !== item.children) {
+        changed = true;
+        return { ...item, children };
+      }
+    }
+    return item;
+  });
+  return changed ? next : items;
+}
+
+function applyReviewThumbnails(item: ReviewSearchResult, thumbMap: Record<string, string>): ReviewSearchResult {
+  if (item.kind === "image" && thumbMap[item.path]) {
+    return { ...item, thumbnailDataUrl: thumbMap[item.path] };
+  }
+  if (item.kind === "folder" && item.children) {
+    const children = item.children.map((child) => applyReviewThumbnails(child, thumbMap));
+    return { ...item, children, thumbnailDataUrl: item.thumbnailDataUrl || thumbMap[item.coverPath ?? ""] || children.find((child) => child.thumbnailDataUrl)?.thumbnailDataUrl };
+  }
+  if (item.kind === "folder" && item.coverPath && thumbMap[item.coverPath]) return { ...item, thumbnailDataUrl: thumbMap[item.coverPath] };
+  return item;
 }
 
 function normalizeHotkey(value: string) {

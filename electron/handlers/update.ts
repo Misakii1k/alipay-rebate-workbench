@@ -1,15 +1,15 @@
-import { autoUpdater } from "electron-updater";
 import { type IpcMain } from "electron";
 import type { AppSettings } from "../../src/lib/shared";
-import { checkForUpdates, setMainWindow } from "../utils/updater";
+import { checkForUpdates, downloadUpdate, installUpdate, setMainWindow } from "../utils/updater";
+import { loadSettings } from "../utils/settings";
 
 /**
  * 注册自动更新相关的 IPC handlers。
  */
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("update:check", (_event, settings: AppSettings) => checkForUpdates(settings));
-  ipcMain.handle("update:download", () => autoUpdater.downloadUpdate());
-  ipcMain.handle("update:install", () => autoUpdater.quitAndInstall(false, true));
+  ipcMain.handle("update:check", async (_event, _settings: AppSettings) => checkForUpdates(await loadSettings()));
+  ipcMain.handle("update:download", () => downloadUpdate());
+  ipcMain.handle("update:install", () => installUpdate());
 }
 
 /**

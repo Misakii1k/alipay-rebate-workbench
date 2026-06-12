@@ -4,13 +4,16 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { AppSettings, ReviewSearchResult, ReviewGenerationOptions, ReviewGenerationResult, ReviewChatPayload, ReviewChatResult } from "../../src/lib/shared";
 import { getReviewApiProfile, normalizeSettings } from "../../src/lib/shared";
-import { validateApiUrl } from "../utils/security";
+import { isPathInsideRoot, validateApiUrl, validatePathSafety } from "../utils/security";
+import { assertAuthorizedRoot, isAuthorizedChildPath } from "../utils/capabilities";
 import { normalizeMatchText } from "../utils/text";
 import { truncatedErrorText } from "../utils/http";
-import { resolveEverythingEsPath, searchWithEverything } from "../utils/everything";
-import { imageToDataUrl } from "../utils/media";
+import { resolveEverythingEsPath } from "../utils/everything";
+import { imageToDataUrl, imageToDataUrlAsync } from "../utils/media";
 import { appendLog } from "../utils/logger";
 import { userDataPath } from "../utils/paths";
+import { runWorkerTask } from "../utils/worker";
+import { loadSettings } from "../utils/settings";
 
 // ============================================================================
 // 类型定义
@@ -53,6 +56,8 @@ let reviewFileCache: {
   cachedAt: number;
   indexedAt: number;
 } | null = null;
+const authorizedReviewRoots = new Set<string>();
+let activeReviewScanController: AbortController | null = null;
 
 export function setMainWindow(window: BrowserWindow | null): void {
   mainWindow = window;
@@ -349,132 +354,122 @@ async function walkMediaIncremental(
 // 主要功能
 // ============================================================================
 
-async function scanReviewAssets(root: string, query: string, settings?: AppSettings, event?: Electron.IpcMainInvokeEvent): Promise<ReviewSearchResult[]> {
+async function scanReviewAssets(root: string, query: string, settings?: AppSettings, event?: Electron.IpcMainInvokeEvent, requestId?: string): Promise<ReviewSearchResult[]> {
   if (!root || !existsSync(root)) throw new Error("请先选择收评助手根目录。");
-
-  const esPath = settings ? resolveEverythingEsPath(settings) : "";
-
-  // Everything path
-  if (esPath && query.trim()) {
-    if (event) event.sender.send("review:scanProgress", { scanned: 0, currentDir: root, phase: "everything" });
-    const esResults = await searchWithEverything(esPath, root, query.trim(), imageExts, 99999);
-    if (esResults.length > 0) {
-      if (event) event.sender.send("review:scanProgress", { scanned: esResults.length, currentDir: "", phase: "done" });
-      return esResults
-        .map((fp) => ({ path: fp, name: path.basename(fp), kind: "image" as const, score: 0, reason: "", mtimeMs: safeMtimeMs(fp) }))
-        .sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
-    }
-  }
-
-  // Fallback path — use disk index with incremental update
-  const now = Date.now();
-  if (!reviewFileCache || reviewFileCache.root !== root) {
-    const disk = await loadReviewIndexFile(root);
-    if (disk && disk.fileIndex.length > 0) {
-      if (event) event.sender.send("review:scanProgress", { scanned: disk.fileIndex.length, currentDir: "", phase: "loaded-cache" });
-      const result = await walkMediaIncremental(root, imageExts, 50000, disk.fileIndex, disk.indexedAt, (scanned, currentDir, phase) => {
-        if (event) event.sender.send("review:scanProgress", { scanned, currentDir, phase });
-      });
-      reviewFileCache = { root, fileIndex: result.fileIndex, folderIndex: result.folderIndex, cachedAt: now, indexedAt: now };
-      void saveReviewIndexFile(root, result.fileIndex, result.folderIndex, now);
-      if (result.added > 0 || result.removed > 0) {
-        if (event) event.sender.send("review:scanProgress", { scanned: result.fileIndex.length, currentDir: "", phase: "done" });
-      }
-    } else {
-      if (event) event.sender.send("review:scanProgress", { scanned: 0, currentDir: root, phase: "start" });
-      const { files, folders } = await walkMediaAndFoldersWithProgress(root, imageExts, 50000, (scanned, currentDir) => {
-        if (event) event.sender.send("review:scanProgress", { scanned, currentDir, phase: "walking" });
-      });
-      const { fileIndex, folderIndex } = buildReviewIndex(root, files, folders);
-      reviewFileCache = { root, fileIndex, folderIndex, cachedAt: now, indexedAt: now };
-      void saveReviewIndexFile(root, fileIndex, folderIndex, now);
-      if (event) event.sender.send("review:scanProgress", { scanned: files.length, currentDir: "", phase: "indexed" });
-    }
-  }
-  const { fileIndex, folderIndex } = reviewFileCache;
-  const q = query.trim().toLowerCase();
-  const terms = q ? q.split(/[\s,，、]+/).filter(Boolean) : [];
-
-  const matchesImage = (item: ReviewFileIndex) => terms.length === 0 || terms.some((term) => item.fileText.includes(term) || item.folderNorm.includes(term) || item.pathText.includes(term));
-
-  const images: ReviewSearchResult[] = fileIndex
-    .filter(matchesImage)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .map((item) => ({ path: item.path, name: item.name, kind: "image" as const, score: 0, reason: "", mtimeMs: item.mtimeMs }));
-
-  return images.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
+  validatePathSafety(root);
+  const savedSettings = normalizeSettings(settings ?? await loadSettings());
+  if (path.resolve(root) !== path.resolve(savedSettings.reviewRootDir)) throw new Error("Review root does not match saved settings.");
+  assertAuthorizedRoot("reviewRoot", root);
+  authorizedReviewRoots.add(path.resolve(root));
+  const esPath = resolveEverythingEsPath(savedSettings);
+  activeReviewScanController?.abort();
+  const controller = new AbortController();
+  activeReviewScanController = controller;
+  return runWorkerTask<{ action: "query"; root: string; query: string; settings?: AppSettings; userDataDir: string; esPath?: string }, ReviewSearchResult[]>(
+    "reviewIndexWorker",
+    { action: "query", root, query, settings: savedSettings, userDataDir: app.getPath("userData"), esPath },
+    (progress) => event?.sender.send("review:scanProgress", progress),
+    { requestId, timeoutMs: 180_000, signal: controller.signal }
+  ).finally(() => {
+    if (activeReviewScanController === controller) activeReviewScanController = null;
+  });
 }
 
-async function loadReviewThumbnails(paths: string[]): Promise<Record<string, string>> {
-  const result: Record<string, string> = {};
-  for (const p of paths.slice(0, 40)) {
-    try {
-      const url = imageToDataUrl(p, 280);
-      if (url) result[p] = url;
-    } catch (error) {
-      await appendLog("warn", "loadReviewThumbnails 跳过不安全路径", { path: p, error: (error as Error).message }, userDataPath);
-    }
-  }
-  return result;
+function allowedReviewPath(p: string, root?: string): boolean {
+  if (!p || !existsSync(p)) return false;
+  if (root) return isAuthorizedChildPath("reviewRoot", p, root, imageExts);
+  if (!root && ![...authorizedReviewRoots].some((allowedRoot) => isPathInsideRoot(p, allowedRoot))) return false;
+  return imageExts.has(path.extname(p).toLowerCase());
 }
 
-async function loadReviewThumbnailBatch(paths: string[], size = 220): Promise<Record<string, string>> {
-  const result: Record<string, string> = {};
-  const limited = paths.slice(0, 64);
-  for (let i = 0; i < limited.length; i++) {
-    const p = limited[i];
-    if (!existsSync(p)) continue;
-    try {
-      const url = imageToDataUrl(p, size);
-      if (url) result[p] = url;
-      if (i % 6 === 5) await new Promise((resolve) => setImmediate(resolve));
-    } catch (error) {
-      await appendLog("warn", "loadReviewThumbnailBatch 跳过不安全路径", { path: p, error: (error as Error).message }, userDataPath);
-    }
-  }
-  return result;
+async function loadReviewThumbnails(paths: string[], root?: string): Promise<Record<string, string>> {
+  return loadReviewThumbnailBatch(paths, 280, root, 40);
+}
+
+async function loadReviewThumbnailBatch(paths: string[], size = 220, root?: string, maxCount = 64): Promise<Record<string, string>> {
+  const valid = (paths || []).filter((p) => allowedReviewPath(p, root)).slice(0, maxCount);
+  return runWorkerTask<{ paths: string[]; size: number; maxCount: number; cacheDir?: string }, Record<string, string>>(
+    "thumbnailWorker",
+    { paths: valid, size, maxCount, cacheDir: path.join(app.getPath("userData"), "thumb-cache") },
+    undefined,
+    { timeoutMs: 45_000 }
+  );
+}
+
+async function loadReviewFolderChildren(root: string, folderPath: string, offset = 0, limit = 200): Promise<ReviewSearchResult[]> {
+  if (!root || !existsSync(root)) throw new Error("请先选择收评助手根目录。");
+  if (!folderPath || !existsSync(folderPath) || !statSync(folderPath).isDirectory()) throw new Error("文件夹不存在。");
+  validatePathSafety(root);
+  validatePathSafety(folderPath, [root]);
+  const settings = normalizeSettings(await loadSettings());
+  if (path.resolve(root) !== path.resolve(settings.reviewRootDir)) throw new Error("Review root does not match saved settings.");
+  assertAuthorizedRoot("reviewRoot", root);
+  if (!isPathInsideRoot(folderPath, root)) throw new Error("文件夹不在已授权的收评根目录内。");
+  authorizedReviewRoots.add(path.resolve(root));
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 200)));
+  return runWorkerTask<{ action: "children"; root: string; folderPath: string; offset: number; limit: number; userDataDir: string }, ReviewSearchResult[]>(
+    "reviewIndexWorker",
+    { action: "children", root, folderPath, offset: safeOffset, limit: safeLimit, userDataDir: app.getPath("userData") },
+    undefined,
+    { timeoutMs: 60_000 }
+  );
 }
 
 async function rebuildReviewIndex(root: string, event: Electron.IpcMainInvokeEvent): Promise<{ ok: boolean; total: number }> {
   if (!root || !existsSync(root)) return { ok: false, total: 0 };
-  reviewFileCache = null;
-  await deleteReviewIndexFile(root);
-  const startedAt = Date.now();
-  const { files, folders } = await walkMediaAndFoldersWithProgress(root, imageExts, 50000, (scanned, currentDir) => {
-    event.sender.send("review:scanProgress", { scanned, currentDir, phase: "walking" });
-  });
-  const { fileIndex, folderIndex } = buildReviewIndex(root, files, folders);
-  const now = Date.now();
-  reviewFileCache = { root, fileIndex, folderIndex, cachedAt: now, indexedAt: now };
-  await saveReviewIndexFile(root, fileIndex, folderIndex, now);
-  event.sender.send("review:scanProgress", { scanned: files.length, currentDir: "", phase: "done", elapsedMs: now - startedAt });
-  return { ok: true, total: files.length };
+  validatePathSafety(root);
+  const settings = await loadSettings();
+  if (path.resolve(root) !== path.resolve(settings.reviewRootDir)) return { ok: false, total: 0 };
+  assertAuthorizedRoot("reviewRoot", root);
+  authorizedReviewRoots.add(path.resolve(root));
+  return runWorkerTask<{ action: "rebuild"; root: string; userDataDir: string }, { ok: boolean; total: number }>(
+    "reviewIndexWorker",
+    { action: "rebuild", root, userDataDir: app.getPath("userData") },
+    (progress) => event.sender.send("review:scanProgress", progress),
+    { timeoutMs: 300_000 }
+  );
 }
 
-function loadImageBase64Entries(paths: string[], maxCount = 4, maxSide = 800): Array<{ base64: string; mediaType: string }> {
+function parseImageDataUrl(value: string): { base64: string; mediaType: string } | null {
+  const match = value.match(/^data:(image\/[\w.+-]+);base64,(.+)$/);
+  if (!match) return null;
+  return {
+    mediaType: match[1] === "image/jpg" ? "image/jpeg" : match[1],
+    base64: match[2]
+  };
+}
+
+async function loadImageBase64Entries(paths: string[], maxCount = 4, maxSide = 800, root?: string): Promise<Array<{ base64: string; mediaType: string }>> {
   const entries: Array<{ base64: string; mediaType: string }> = [];
   for (const p of paths.slice(0, maxCount)) {
-    if (!existsSync(p)) continue;
-    const dataUrl = imageToDataUrl(p, maxSide);
+    const dataUrlEntry = parseImageDataUrl(p);
+    if (dataUrlEntry) {
+      entries.push(dataUrlEntry);
+      continue;
+    }
+    if (!allowedReviewPath(p, root)) continue;
+    const dataUrl = await imageToDataUrlAsync(p, maxSide);
     if (!dataUrl) continue;
-    const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
-    if (match) entries.push({ mediaType: match[1], base64: match[2] });
+    const entry = parseImageDataUrl(dataUrl);
+    if (entry) entries.push(entry);
   }
   return entries;
 }
 
 async function generateReviewCopy(settings: AppSettings, options: ReviewGenerationOptions): Promise<ReviewGenerationResult> {
-  const normalizedSettings = normalizeSettings(settings);
+  const normalizedSettings = normalizeSettings(await loadSettings());
   const profile = getReviewApiProfile(normalizedSettings);
   if (!profile.apiBaseUrl || !profile.apiKey) throw new Error("请先在设置中填写 API Base URL 和 API Key。");
   validateApiUrl(profile.apiBaseUrl);
   const isAnthropic = profile.apiType === "anthropic";
   const targetLength = Math.min(100, Math.max(30, Math.round(Number(options.targetLength) || normalizedSettings.reviewTargetLength)));
   const thinkingMode = options.thinkingMode || normalizedSettings.reviewThinkingMode;
+  const copyCount = Math.min(12, Math.max(3, Math.round(options.copyCount) || normalizedSettings.reviewCopyCount));
 
-  const imageEntries = loadImageBase64Entries(options.selectedPaths || []);
+  const imageEntries = await loadImageBase64Entries(options.selectedPaths || [], 4, 800, normalizedSettings.reviewRootDir);
   const hasImages = imageEntries.length > 0;
-  const modelId = hasImages ? (profile.visionModel || profile.textModel || settings.textModel) : (profile.textModel || settings.textModel);
+  const modelId = hasImages ? (profile.visionModel || profile.textModel || normalizedSettings.textModel) : (profile.textModel || normalizedSettings.textModel);
 
   const allAngles = [
     "面料与体感（触感、透气性、柔软度、亲肤感）",
@@ -495,7 +490,7 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
 
   const seed = options.batchSeed;
   const shuffled = [...allAngles].sort((_, __) => Math.sin(seed * 7 + allAngles.indexOf(_)) - 0.5);
-  const pickedAngles = shuffled.slice(0, 4);
+  const pickedAngles = shuffled.slice(0, Math.min(Math.max(copyCount - 2, 2), 6));
   const opener = openerStyles[(seed - 1) % openerStyles.length];
 
   const systemPrompt = [
@@ -511,7 +506,7 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
   ].filter(Boolean).join("\n");
 
   const promptText = [
-    "请生成 6 条中文买家好评文案。严格遵守以下要求：",
+    `请生成 ${copyCount} 条中文买家好评文案。严格遵守以下要求：`,
     "",
     `商品/搜索词：${options.query}`,
     `商品补充描述：${options.productDescription || "无"}`,
@@ -527,9 +522,9 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
     `思考模式：${thinkingMode === "on" ? "开启" : thinkingMode === "auto" ? "自动" : "关闭"}`,
     "",
     "【本批次多样性要求】",
-    `本次 6 条文案请分别从以下角度切入（每条选一个不同角度）：`,
+    `本次 ${copyCount} 条文案请分别从以下角度切入（每条选一个不同角度）：`,
     ...pickedAngles.map((a, i) => `  ${i + 1}. ${a}`),
-    `  5-6. 自由发挥，但不能与上面4个角度重复`,
+    ...(copyCount > pickedAngles.length ? [`  ${pickedAngles.length + 1}-${copyCount}. 自由发挥，但不能与上面角度重复`] : []),
     `本次开场风格偏好：${opener}`,
     "",
     "【格式】不要编号，只返回 JSON：{\"copies\":[\"...\"]}"
@@ -571,7 +566,7 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
     const data = await response.json();
     const textBlock = (data?.content as Array<{ type: string; text?: string }>)?.find((b: { type: string }) => b.type === "text");
     const parsed = JSON.parse(textBlock?.text || "{}");
-    return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, 8) : [] };
+    return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, copyCount) : [] };
   } else {
     const endpoint = `${profile.apiBaseUrl.replace(/\/$/, "")}/chat/completions`;
 
@@ -602,22 +597,42 @@ async function generateReviewCopy(settings: AppSettings, options: ReviewGenerati
     const data = await response.json();
     const content = data?.choices?.[0]?.message?.content;
     const parsed = JSON.parse(content || "{}");
-    return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, 8) : [] };
+    return { copies: Array.isArray(parsed.copies) ? parsed.copies.map(String).slice(0, copyCount) : [] };
   }
 }
 
 async function chatReviewCopy(settings: AppSettings, payload: ReviewChatPayload): Promise<ReviewChatResult> {
-  const normalizedSettings = normalizeSettings(settings);
+  const normalizedSettings = normalizeSettings(await loadSettings());
   const profile = getReviewApiProfile(normalizedSettings);
   if (!profile.apiBaseUrl || !profile.apiKey) throw new Error("请先在设置中填写 API Base URL 和 API Key。");
   validateApiUrl(profile.apiBaseUrl);
   const isAnthropic = profile.apiType === "anthropic";
   const targetLength = Math.min(100, Math.max(30, Math.round(Number(payload.targetLength) || normalizedSettings.reviewTargetLength)));
   const thinkingMode = payload.thinkingMode || normalizedSettings.reviewThinkingMode;
+  const productDescription = payload.productDescription?.trim();
+  const styleHints = [
+    `专业程度：${payload.professionalLevel ?? normalizedSettings.reviewProfessionalLevel}`,
+    `买家真实感：${payload.buyerLevel ?? normalizedSettings.reviewBuyerLevel}`,
+    `夸张程度：${payload.exaggerationLevel ?? normalizedSettings.reviewExaggerationLevel}`,
+    `场景化表达：${payload.sceneLevel ?? normalizedSettings.reviewSceneLevel}`,
+    `提到性价比：${payload.mentionValue ?? normalizedSettings.reviewMentionValue ? "是" : "否"}`
+  ].join("；");
 
-  const imageEntries = loadImageBase64Entries(payload.images || []);
-  const hasImages = imageEntries.length > 0;
-  const modelId = hasImages ? (profile.visionModel || profile.textModel || settings.textModel) : (profile.textModel || settings.textModel);
+  const chatImageCache = new Map<string, Array<{ base64: string; mediaType: string }>>();
+  const loadChatImages = async (images?: string[]) => {
+    const list = images || [];
+    const key = JSON.stringify(list);
+    const cached = chatImageCache.get(key);
+    if (cached) return cached;
+    const entries = await loadImageBase64Entries(list, 8, 960, normalizedSettings.reviewRootDir);
+    chatImageCache.set(key, entries);
+    return entries;
+  };
+
+  const imageEntries = await loadChatImages(payload.images);
+  const historyImageEntries = await Promise.all((payload.messages || []).map((msg) => loadChatImages(msg.images)));
+  const hasImages = imageEntries.length > 0 || historyImageEntries.some((entries) => entries.length > 0);
+  const modelId = hasImages ? (profile.visionModel || profile.textModel || normalizedSettings.textModel) : (profile.textModel || normalizedSettings.textModel);
 
   const systemPrompt = [
     "你是电商文案专家，擅长写真实买家好评。你正在和用户进行对话，帮ta写出更满意的评价文案。",
@@ -628,16 +643,18 @@ async function chatReviewCopy(settings: AppSettings, payload: ReviewChatPayload)
     hasImages ? "- 用户可能提供了商品参考图片，仔细观察图片中的外观特征" : "",
     "- 回应用户的具体要求（如改短、加表情、调整风格等）",
     "- 如果用户没有明确要求，可以给出写好评价的建议",
-    payload.query ? `当前商品/搜索词：${payload.query}` : ""
+    payload.query ? `当前商品/搜索词：${payload.query}` : "",
+    productDescription ? `商品描述补充：${productDescription}` : "",
+    `当前风格参数：${styleHints}`
   ].filter(Boolean).join("\n");
 
   const customPrompt = payload.customPrompt?.trim() || normalizedSettings.reviewCustomPrompt?.trim();
   const finalSystemPrompt = customPrompt ? `${systemPrompt}\n\n用户自定义要求：\n${customPrompt}` : systemPrompt;
 
-  const historyMessages = (payload.messages || []).map((msg) => {
+  const historyMessages = (payload.messages || []).map((msg, index) => {
     if (msg.role === "assistant") return { role: "assistant", content: msg.content };
     if (msg.images && msg.images.length > 0) {
-      const imgEntries = loadImageBase64Entries(msg.images);
+      const imgEntries = historyImageEntries[index] ?? [];
       if (isAnthropic) {
         const content: unknown[] = imgEntries.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.base64 } }));
         content.push({ type: "text", text: msg.content });
@@ -704,7 +721,7 @@ async function chatReviewCopy(settings: AppSettings, payload: ReviewChatPayload)
 }
 
 function startDragFiles(event: Electron.IpcMainInvokeEvent, paths: string[]): void {
-  const validPaths = (paths || []).filter((p) => p && existsSync(p));
+  const validPaths = (paths || []).filter((p) => allowedReviewPath(p));
   if (validPaths.length === 0) return;
   let icon = nativeImage.createFromPath(validPaths[0]);
   if (icon.isEmpty()) {
@@ -727,11 +744,14 @@ function startDragFiles(event: Electron.IpcMainInvokeEvent, paths: string[]): vo
  * 注册收评助手相关的 IPC handlers。
  */
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("review:scanAssets", (_event, root: string, query: string, settings: AppSettings) =>
-    scanReviewAssets(root, query, settings)
+  ipcMain.handle("review:scanAssets", async (event, root: string, query: string, _settings: AppSettings, requestId?: string) =>
+    scanReviewAssets(root, query, await loadSettings(), event, requestId)
   );
   ipcMain.handle("review:loadThumbnails", (_event, paths: string[]) => loadReviewThumbnails(paths));
-  ipcMain.handle("review:loadThumbnailBatch", (_event, paths: string[], size?: number) => loadReviewThumbnailBatch(paths, size));
+  ipcMain.handle("review:loadThumbnailBatch", (_event, paths: string[], size?: number, root?: string) => loadReviewThumbnailBatch(paths, size, root));
+  ipcMain.handle("review:loadFolderChildren", (_event, root: string, folderPath: string, offset?: number, limit?: number) =>
+    loadReviewFolderChildren(root, folderPath, offset, limit)
+  );
   ipcMain.handle("review:rebuildIndex", (event, root: string) => rebuildReviewIndex(root, event));
   ipcMain.handle("review:generateCopy", (_event, settings: AppSettings, options: ReviewGenerationOptions) =>
     generateReviewCopy(settings, options)

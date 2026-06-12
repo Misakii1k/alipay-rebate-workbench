@@ -3,6 +3,7 @@ import type {
   AppSettings,
   ClipboardSnapshot,
   CloudReview,
+  DirectoryCapabilityKind,
   ExportPayload,
   ExportResult,
   FfmpegStatus,
@@ -47,7 +48,7 @@ const api = {
   closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
   selectFiles: (options: SelectFilesOptions): Promise<SelectPathResult> => ipcRenderer.invoke("files:select", options),
   getPathForFile: (file: File): string => webUtils?.getPathForFile(file) || (file as File & { path?: string }).path || "",
-  selectDirectory: (title: string): Promise<SelectPathResult> => ipcRenderer.invoke("directory:select", title),
+  selectDirectory: (title: string, kind?: DirectoryCapabilityKind): Promise<SelectPathResult> => ipcRenderer.invoke("directory:select", title, kind),
   selectTitleKeywordExcel: (): Promise<SelectPathResult> => ipcRenderer.invoke("title:selectExcel"),
   loadTitleKeywordData: (settings: AppSettings): Promise<TitleKeywordData> => ipcRenderer.invoke("title:loadKeywordData", settings),
   analyzeTitle: (settings: AppSettings, payload: TitleAnalyzePayload): Promise<TitleAnalysisResult> =>
@@ -57,9 +58,10 @@ const api = {
   getFfmpegStatus: (settings: AppSettings): Promise<FfmpegStatus> => ipcRenderer.invoke("ffmpeg:status", settings),
   diagnoseFfmpeg: (settings: AppSettings): Promise<{ items: Array<{ label: string; passed: boolean; detail: string }>; suggestions: string[]; ok: boolean }> => ipcRenderer.invoke("ffmpeg:diagnose", settings),
   autoFixFfmpeg: (settings: AppSettings): Promise<{ fixed: string[]; failed: string[]; settingsPatch: Partial<AppSettings> | null }> => ipcRenderer.invoke("ffmpeg:autoFix", settings),
-  scanVideoLibrary: (settings: AppSettings, productName: string, colorName: string, speedMode?: boolean): Promise<VideoCandidate[]> =>
-    ipcRenderer.invoke("video:scanLibrary", settings, productName, colorName, speedMode),
+  scanVideoLibrary: (settings: AppSettings, productName: string, colorName: string, speedMode?: boolean, requestId?: string): Promise<VideoCandidate[]> =>
+    ipcRenderer.invoke("video:scanLibrary", settings, productName, colorName, speedMode, requestId),
   renderVideoTask: (payload: VideoRenderPayload): Promise<VideoRenderResult> => ipcRenderer.invoke("video:renderTask", payload),
+  cancelVideoRender: (taskId: string): Promise<{ canceled: boolean }> => ipcRenderer.invoke("video:cancelRender", taskId),
   onVideoRenderProgress: (callback: (progress: VideoRenderProgress) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: VideoRenderProgress) => callback(progress);
     ipcRenderer.on("video:renderProgress", listener);
@@ -67,9 +69,11 @@ const api = {
   },
   getLatestImageInDirectory: (dir: string): Promise<string> => ipcRenderer.invoke("media:latestImage", dir),
   getImagePreview: (filePath: string): Promise<string> => ipcRenderer.invoke("media:imagePreview", filePath),
-  scanReviewAssets: (root: string, query: string, settings?: AppSettings): Promise<ReviewSearchResult[]> => ipcRenderer.invoke("review:scanAssets", root, query, settings),
+  scanReviewAssets: (root: string, query: string, settings?: AppSettings, requestId?: string): Promise<ReviewSearchResult[]> => ipcRenderer.invoke("review:scanAssets", root, query, settings, requestId),
   loadReviewThumbnails: (paths: string[]): Promise<Record<string, string>> => ipcRenderer.invoke("review:loadThumbnails", paths),
-  loadReviewThumbnailBatch: (paths: string[], size?: number): Promise<Record<string, string>> => ipcRenderer.invoke("review:loadThumbnailBatch", paths, size),
+  loadReviewThumbnailBatch: (paths: string[], size?: number, root?: string): Promise<Record<string, string>> => ipcRenderer.invoke("review:loadThumbnailBatch", paths, size, root),
+  loadReviewFolderChildren: (root: string, folderPath: string, offset?: number, limit?: number): Promise<ReviewSearchResult[]> =>
+    ipcRenderer.invoke("review:loadFolderChildren", root, folderPath, offset, limit),
   rebuildReviewIndex: (root: string): Promise<{ ok: boolean; total: number }> => ipcRenderer.invoke("review:rebuildIndex", root),
   onReviewScanProgress: (callback: (progress: { scanned: number; currentDir: string; phase: string; elapsedMs?: number }) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: { scanned: number; currentDir: string; phase: string; elapsedMs?: number }) => callback(progress);

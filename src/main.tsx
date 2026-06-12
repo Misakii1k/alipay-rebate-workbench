@@ -1,11 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import "@fontsource-variable/cormorant-garamond";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/noto-sans-sc";
 import "./styles.css";
+import "./atelier.css";
 import { DEFAULT_SETTINGS, DEFAULT_WORKBENCH_STATE, normalizeSettings } from "./lib/shared";
+
+document.documentElement.setAttribute("data-ui-design", "atelier");
+localStorage.removeItem("app-ui-design");
 
 if (!window.alipayWorkbench) {
   window.alipayWorkbench = {
@@ -82,12 +85,14 @@ if (!window.alipayWorkbench) {
     autoFixFfmpeg: async () => ({ fixed: [], failed: ["浏览器预览模式不支持自动修复"], settingsPatch: null }),
     scanVideoLibrary: async () => [],
     renderVideoTask: async () => ({ success: false, log: "", error: "浏览器预览模式不执行 FFmpeg，请使用桌面端。" }),
+    cancelVideoRender: async () => ({ canceled: false }),
     onVideoRenderProgress: () => () => undefined,
     getLatestImageInDirectory: async () => "",
     getImagePreview: async () => "",
     scanReviewAssets: async () => [],
     loadReviewThumbnails: async () => ({}),
     loadReviewThumbnailBatch: async () => ({}),
+    loadReviewFolderChildren: async () => [],
     rebuildReviewIndex: async () => ({ ok: false, total: 0 }),
     onReviewScanProgress: () => () => undefined,
     startDragFiles: async () => undefined,

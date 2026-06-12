@@ -60,9 +60,14 @@ import {
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
 
-const APP_VERSION = "0.10.9";
+const APP_VERSION = "0.11.4";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "0.11.4 低配流畅度收口：收评文件夹改为展开时懒加载，连续收评/视频扫描会取消旧 worker；视频智能扫描新增自动/极速/标准三态，对比工具大名单分页渲染。",
+  "0.11.3 低配流畅度收口：返款预览分页渲染，视频候选和任务队列窗口化；低配模式下智能扫描自动跳过候选缩略图，极速模式状态更清晰。",
+  "0.11.2 低配流畅度优化：新增性能模式，低性能设备自动减少动效、阴影和缩略图并发；收评助手拆分缩略图状态，视频极速模式标识更明确，标题和对比工具减少等待与高频重算。",
+  "0.11.1 遗留问题收口：修复启动加载门禁、收评/视频/标题工具的安全授权与交互回归，自动更新默认禁用，并补齐 worker、体积统计和打包验证。",
+  "0.11.0 性能深改：收评索引、缩略图和视频库扫描移到后台 worker，启动时减少重依赖和自动网络请求；字体资源瘦身，安全校验与更新状态门禁加强。",
   "0.10.9 修了几个界面上的小毛病：浅色模式下页面能正常滚动了，按钮不会再被切掉一半；顶部工具栏在浅色模式下颜色暖和了，看着不突兀；首页那条深浅分界线过渡更自然；主题切换的水波纹扩散动画恢复了。",
   "0.10.8 界面变得更好看了：首页大标题不再被挤断成两行，每个工具卡片有了自己的颜色，鼠标放上去会轻轻浮起来；首页那两个数字（今日返款、待处理）看着更清楚；按钮颜色更顺眼。深色和浅色两种皮肤都一起美化了。",
   "0.10.7 前端切换为 Atelier 高端外观，移除旧版 Classic UI 入口。",
@@ -124,6 +129,32 @@ const rebateNavItems: Array<{ key: RebateViewKey; label: string; desc: string; i
   { key: "export", label: "导出", desc: "将验证后的数据导出为标准支付宝批量转账 Excel 模板", icon: Download }
 ];
 
+type ResolvedPerformanceMode = Exclude<AppSettings["performanceMode"], "auto">;
+
+function resolvePerformanceMode(mode: AppSettings["performanceMode"]): ResolvedPerformanceMode {
+  if (mode !== "auto") return mode;
+  return shouldUseLowPerformanceMode() ? "low" : "balanced";
+}
+
+function shouldUseLowPerformanceMode() {
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const cpuCores = Number(nav.hardwareConcurrency || 0);
+  const deviceMemory = Number(nav.deviceMemory || 0);
+  const dpr = window.devicePixelRatio || 1;
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+  let score = 0;
+  if (reducedMotion) score += 3;
+  if (cpuCores > 0 && cpuCores <= 4) score += 2;
+  else if (cpuCores > 0 && cpuCores <= 6) score += 1;
+  if (deviceMemory > 0 && deviceMemory <= 4) score += 2;
+  else if (deviceMemory > 0 && deviceMemory <= 8) score += 1;
+  if (dpr >= 2.5) score += 2;
+  else if (dpr >= 2) score += 1;
+
+  return score >= 3;
+}
+
 function mergeLearningNotes(existing: string, note: string): string {
   const cleaned = note.replace(/\s+/g, " ").trim();
   if (!cleaned) return existing;
@@ -140,6 +171,8 @@ export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => (localStorage.getItem("app-theme") === "light" ? "light" : "dark"));
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [workbenchStateLoaded, setWorkbenchStateLoaded] = useState(false);
+  const [resolvedPerformanceMode, setResolvedPerformanceMode] = useState<ResolvedPerformanceMode>(() => resolvePerformanceMode(DEFAULT_SETTINGS.performanceMode));
   const [modelStatus, setModelStatus] = useState<ModelConnectionStatus>({ state: "unknown", detail: "尚未测试大模型连接" });
   const [amountInput, setAmountInput] = useState("");
   const [remarkInput, setRemarkInput] = useState("");
@@ -180,6 +213,25 @@ export default function App() {
   }, [settings.fontScale]);
 
   useEffect(() => {
+    const root = document.documentElement;
+    const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const applyPerformanceMode = () => {
+      const nextMode = resolvePerformanceMode(settings.performanceMode);
+      root.setAttribute("data-performance", nextMode);
+      setResolvedPerformanceMode(nextMode);
+    };
+
+    applyPerformanceMode();
+    motionQuery?.addEventListener("change", applyPerformanceMode);
+    window.addEventListener("resize", applyPerformanceMode);
+
+    return () => {
+      motionQuery?.removeEventListener("change", applyPerformanceMode);
+      window.removeEventListener("resize", applyPerformanceMode);
+    };
+  }, [settings.performanceMode]);
+
+  useEffect(() => {
     if (!rows.length) {
       completionNotifiedRef.current = false;
       return;
@@ -200,30 +252,27 @@ export default function App() {
       const normalized = normalizeSettings(loaded);
       setSettings(normalized);
       setSettingsLoaded(true);
-      // 启动时自动测试大模型连接
-      if (normalized.apiKey && normalized.apiBaseUrl) {
-        setModelStatus({ state: "testing", detail: "正在自动测试大模型连接" });
-        window.alipayWorkbench.testModelConnection(normalized).then((result) => {
-          setModelStatus(result);
-        });
-      }
     });
     window.alipayWorkbench.loadWorkbenchState().then((state) => {
       setAmountInput(state.amountInput);
       setRemarkInput(state.remarkInput);
       setRows(state.rows ?? []);
       setCurrentIndex(state.currentIndex ?? 0);
-    });
-    window.alipayWorkbench.loadVideoWorkbenchState().then(setVideoState);
+    }).catch(() => undefined).finally(() => setWorkbenchStateLoaded(true));
   }, []);
 
   useEffect(() => {
-    if (!settingsLoaded) return;
+    if (view !== "video" || videoState) return;
+    window.alipayWorkbench.loadVideoWorkbenchState().then(setVideoState);
+  }, [view, videoState]);
+
+  useEffect(() => {
+    if (!settingsLoaded || !workbenchStateLoaded) return;
     const timer = window.setTimeout(() => {
       void window.alipayWorkbench.saveWorkbenchState({ amountInput, remarkInput, rows, currentIndex });
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [settingsLoaded, amountInput, remarkInput, rows, currentIndex]);
+  }, [settingsLoaded, workbenchStateLoaded, amountInput, remarkInput, rows, currentIndex]);
 
   useEffect(() => {
     if (currentRow) {
@@ -819,10 +868,10 @@ export default function App() {
 
         {/* 懒加载组件用 Suspense 包装，显示加载状态 */}
         <Suspense fallback={<div className="loading-fallback"><Loader2 className="spin" size={32} /><span>加载中...</span></div>}>
-          {view === "video" && <VideoWorkbench settings={settings} onSaveSettings={saveSettings} onStateChange={setVideoState} showToast={showToast} />}
-          {view === "review" && <ReviewAssistant settings={settings} onSaveSettings={saveSettings} showToast={showToast} modelConnected={modelStatus.state === "connected"} />}
-          {view === "title" && <TitleOptimizer settings={settings} onSaveSettings={saveSettings} showToast={showToast} />}
-          {view === "compare" && <CompareWorkbench settings={settings} showToast={showToast} />}
+          {view === "video" && <VideoWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} onStateChange={setVideoState} showToast={showToast} />}
+          {view === "review" && <ReviewAssistant settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} showToast={showToast} modelConnected={modelStatus.state === "connected"} />}
+          {view === "title" && <TitleOptimizer settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} showToast={showToast} />}
+          {view === "compare" && <CompareWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} showToast={showToast} />}
         </Suspense>
 
         {view === "settings" && <SettingsView settings={settings} onSave={saveSettings} modelStatus={modelStatus} onTestModel={async (draft) => {
@@ -919,6 +968,14 @@ function computeDuplicateWarnings(rows: RebateRow[]): string[] {
   return warnings;
 }
 
+function useLowPerformanceSetting(settings: AppSettings) {
+  const mode = settings.performanceMode ?? "auto";
+  if (mode === "low") return true;
+  if (mode === "quality" || mode === "balanced") return false;
+  if (typeof document !== "undefined" && document.documentElement.getAttribute("data-performance") === "low") return true;
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+}
+
 function ExportView({ rows, doneCount, totalAmount, exportName, validationErrors, settings, onExport }: { rows: RebateRow[]; doneCount: number; totalAmount: number; exportName: string; validationErrors: string[]; settings: AppSettings; onExport: () => void }) {
   const dupWarnings = useMemo(() => computeDuplicateWarnings(rows), [rows]);
   return (
@@ -946,6 +1003,11 @@ function ExportView({ rows, doneCount, totalAmount, exportName, validationErrors
 }
 
 function RowsTable({ rows, currentIndex, onPick, onClear, onAdoptCloud, onKeepLocal, settings } : { rows: RebateRow[]; currentIndex: number; onPick: (index: number) => void; onClear: () => void; onAdoptCloud: (index: number, cloud: CloudReview) => void; onKeepLocal: (index: number, cloud: CloudReview) => void; settings: AppSettings }) {
+  const lowPerformance = useLowPerformanceSetting(settings);
+  const pageSize = lowPerformance ? 50 : 100;
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const [page, setPage] = useState(() => Math.min(Math.floor(currentIndex / pageSize), pageCount - 1));
+  const lastCurrentIndexRef = useRef(currentIndex);
   const duplicates = useMemo(() => {
     const nameCount = new Map<string, number>();
     const accountCount = new Map<string, number>();
@@ -964,6 +1026,19 @@ function RowsTable({ rows, currentIndex, onPick, onClear, onAdoptCloud, onKeepLo
     for (const acc of dupAccounts) warnings.push(`同账户"${acc}"出现 ${accountCount.get(acc)} 次`);
     return { dupNames, dupAccounts, warnings };
   }, [rows]);
+  const pageStart = page * pageSize;
+  const visibleRows = rows.slice(pageStart, pageStart + pageSize);
+  const pageEnd = Math.min(rows.length, pageStart + visibleRows.length);
+
+  useEffect(() => {
+    setPage((prev) => Math.min(prev, pageCount - 1));
+  }, [pageCount]);
+
+  useEffect(() => {
+    if (lastCurrentIndexRef.current === currentIndex) return;
+    lastCurrentIndexRef.current = currentIndex;
+    setPage(Math.min(Math.floor(currentIndex / pageSize), pageCount - 1));
+  }, [currentIndex, pageCount, pageSize]);
 
   return (
     <Panel title="完整预览" icon={Eye} action={<button className="secondary-action danger-text compact" onClick={onClear} title="删除当前所有返款记录，此操作不可撤销"><Eraser size={16} /> 清空列表</button>}>
@@ -974,16 +1049,27 @@ function RowsTable({ rows, currentIndex, onPick, onClear, onAdoptCloud, onKeepLo
         </div>
       )}
       {rows.length ? (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>序号</th><th>账号</th><th>姓名</th><th>金额</th><th>备注</th><th>状态</th>{settings.enhancedCloudValidation && <th>云端校验</th>}<th>处理</th></tr></thead>
-            <tbody>{rows.map((row, index) => {
-              const isDupName = duplicates.dupNames.has(row.name.trim());
-              const isDupAccount = duplicates.dupAccounts.has(row.account.trim());
-              return <tr key={row.id} className={clsx(index === currentIndex && "selected", (isDupName || isDupAccount) && "duplicate-row")}><td>{index + 1}</td><td className={clsx(isDupAccount && "duplicate-cell")}>{row.account || "待填写"}</td><td className={clsx(isDupName && "duplicate-cell")}>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td>{settings.enhancedCloudValidation && <td>{renderCloudReviewStatus(row.cloudReview, index, onAdoptCloud, onKeepLocal)}</td>}<td><button onClick={() => onPick(index)} title="进入录入页面编辑本条记录的账号和姓名">编辑</button></td></tr>;
-            })}</tbody>
-          </table>
-        </div>
+        <>
+          <div className="preview-pager">
+            <span>显示 {pageStart + 1}-{pageEnd} / {rows.length} 条</span>
+            <div>
+              <button className="secondary-action compact" onClick={() => setPage((prev) => Math.max(0, prev - 1))} disabled={page <= 0} title="查看上一页返款记录">上一页</button>
+              <strong>{page + 1} / {pageCount}</strong>
+              <button className="secondary-action compact" onClick={() => setPage((prev) => Math.min(pageCount - 1, prev + 1))} disabled={page >= pageCount - 1} title="查看下一页返款记录">下一页</button>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>序号</th><th>账号</th><th>姓名</th><th>金额</th><th>备注</th><th>状态</th>{settings.enhancedCloudValidation && <th>云端校验</th>}<th>处理</th></tr></thead>
+              <tbody>{visibleRows.map((row, offset) => {
+                const index = pageStart + offset;
+                const isDupName = duplicates.dupNames.has(row.name.trim());
+                const isDupAccount = duplicates.dupAccounts.has(row.account.trim());
+                return <tr key={row.id} className={clsx(index === currentIndex && "selected", (isDupName || isDupAccount) && "duplicate-row")}><td>{index + 1}</td><td className={clsx(isDupAccount && "duplicate-cell")}>{row.account || "待填写"}</td><td className={clsx(isDupName && "duplicate-cell")}>{row.name || "待填写"}</td><td>{row.amount}</td><td>{row.remark}</td><td><span className={clsx("row-status", row.status)}>{statusLabel(row.status)}</span></td>{settings.enhancedCloudValidation && <td>{renderCloudReviewStatus(row.cloudReview, index, onAdoptCloud, onKeepLocal)}</td>}<td><button onClick={() => onPick(index)} title="进入录入页面编辑本条记录的账号和姓名">编辑</button></td></tr>;
+              })}</tbody>
+            </table>
+          </div>
+        </>
       ) : <EmptyState text="当前没有返款列表，请先在批量导入中生成。" />}
     </Panel>
   );
@@ -1046,7 +1132,8 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
   const activeProfile = getActiveApiProfile(draft);
   const setProfile = (patch: Partial<ApiProfile>) => setDraft((prev) => syncActiveApiProfile(prev, patch));
   const pickDirectory = async (key: "videoLibraryDir" | "videoOutputDir" | "reviewRootDir", title: string) => {
-    const result = await window.alipayWorkbench.selectDirectory(title);
+    const kind = key === "videoLibraryDir" ? "videoLibrary" : key === "videoOutputDir" ? "videoOutput" : "reviewRoot";
+    const result = await window.alipayWorkbench.selectDirectory(title, kind);
     if (!result.canceled && result.paths[0]) set(key, result.paths[0]);
   };
   const pickFfmpeg = async () => {
@@ -1207,6 +1294,7 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
 
         <label><span>工具箱名称</span><input value={draft.toolboxName} onChange={(event) => set("toolboxName", event.target.value)} /></label>
         <FontScalePicker value={draft.fontScale} onChange={(value) => set("fontScale", value)} />
+        <PerformanceModePicker value={draft.performanceMode} onChange={(value) => set("performanceMode", value)} />
 
         <label><span>API Base URL</span><input value={activeProfile.apiBaseUrl} onChange={(event) => setProfile({ apiBaseUrl: event.target.value })} /></label>
 
@@ -1289,8 +1377,8 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
         <label><span>已学习识别规则</span><textarea value={draft.learningPromptNotes} onChange={(event) => set("learningPromptNotes", event.target.value)} placeholder="用户采纳或手动修正后，大模型总结的可复用识别规则会保存在这里。" /></label>
         <button className="secondary-action light" onClick={() => set("learningPromptNotes", "")} title="清空已经学习到的识别纠偏规则">清空学习规则</button>
       </div></Panel></section>}
-      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><Toggle checked={draft.videoSpeedMode} label="极速模式（不加载素材缩略图，扫描更快）" onChange={(value) => set("videoSpeedMode", value)} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。</div></div></Panel></section>}
-      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><label><span>云端更新源 URL</span><input value={draft.updateFeedUrl} onChange={(event) => set("updateFeedUrl", event.target.value)} /></label></div></Panel></section>}
+      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-720">720 × 960</option><option value="story-1080">1080 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
+      {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><div className="hint-card">自动更新暂未启用；发布源和签名策略确认后再开放。</div></div></Panel></section>}
       {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()} title="选择标题关键词 Excel 文件"><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><span className="settings-autosave-hint">{lastSaved ? `已自动保存 ${new Date(lastSaved).toLocaleTimeString()}` : ""}</span></div>
@@ -1314,6 +1402,49 @@ function FontScalePicker({ value, onChange }: { value: AppSettings["fontScale"];
       <div className="segmented font-scale-options">
         {options.map((item) => (
           <button key={item.value} className={clsx(value === item.value && "active")} onClick={() => onChange(item.value)} title={`选择${item.label}字体大小`}>
+            <strong>{item.label}</strong>
+            <em>{item.detail}</em>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function VideoScanModePicker({ value, onChange }: { value: AppSettings["videoScanMode"]; onChange: (value: AppSettings["videoScanMode"]) => void }) {
+  const options: Array<{ value: AppSettings["videoScanMode"]; label: string; detail: string }> = [
+    { value: "auto", label: "自动", detail: "低配自动极速" },
+    { value: "speed", label: "极速", detail: "跳过缩略图" },
+    { value: "preview", label: "标准", detail: "显示预览图" }
+  ];
+  return (
+    <div className="font-scale-setting">
+      <span>智能扫描模式</span>
+      <div className="segmented font-scale-options">
+        {options.map((item) => (
+          <button key={item.value} className={clsx(value === item.value && "active")} onClick={() => onChange(item.value)} title={`选择${item.label}扫描模式`}>
+            <strong>{item.label}</strong>
+            <em>{item.detail}</em>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PerformanceModePicker({ value, onChange }: { value: AppSettings["performanceMode"]; onChange: (value: AppSettings["performanceMode"]) => void }) {
+  const options: Array<{ value: AppSettings["performanceMode"]; label: string; detail: string }> = [
+    { value: "auto", label: "自动", detail: "按设备判断" },
+    { value: "quality", label: "画质", detail: "完整动效" },
+    { value: "balanced", label: "均衡", detail: "默认表现" },
+    { value: "low", label: "低性能", detail: "减少特效" }
+  ];
+  return (
+    <div className="font-scale-setting">
+      <span>性能模式</span>
+      <div className="segmented performance-mode-options">
+        {options.map((item) => (
+          <button key={item.value} className={clsx(value === item.value && "active")} onClick={() => onChange(item.value)} title={`选择${item.label}性能模式`}>
             <strong>{item.label}</strong>
             <em>{item.detail}</em>
           </button>

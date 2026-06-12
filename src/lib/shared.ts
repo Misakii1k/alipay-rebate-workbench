@@ -3,8 +3,13 @@ export type RebateViewKey = "import" | "entry" | "preview" | "export";
 export type VideoTemplateId = "bos-template" | "video-slice";
 export type VideoTaskStatus = "draft" | "ready" | "processing" | "done" | "failed";
 export type FontScale = "small" | "normal" | "large";
+export type PerformanceMode = "auto" | "quality" | "balanced" | "low";
+export type VideoScanMode = "auto" | "speed" | "preview";
+export type VideoOutputSize = "auto" | "portrait-1080" | "portrait-720" | "story-1080";
+export type VideoQualityMode = "preserve" | "high" | "balanced";
 export type ReviewWorkspaceMode = "search" | "ai" | "mixed";
 export type ReviewThinkingMode = "off" | "auto" | "on";
+export type DirectoryCapabilityKind = "mediaRoot" | "reviewRoot" | "videoLibrary" | "videoOutput";
 
 export type ApiType = "openai" | "anthropic";
 
@@ -45,7 +50,10 @@ export interface AppSettings {
   videoOutputDir: string;
   ffmpegPath: string;
   videoSpeedMode: boolean;
+  videoScanMode: VideoScanMode;
   videoTemplate: VideoTemplateId;
+  videoOutputSize: VideoOutputSize;
+  videoQualityMode: VideoQualityMode;
   updateFeedUrl: string;
   reviewRootDir: string;
   reviewProfessionalLevel: number;
@@ -54,6 +62,7 @@ export interface AppSettings {
   reviewSceneLevel: number;
   reviewMentionValue: boolean;
   reviewProductDescription: string;
+  reviewCopyCount: number;
   titleKeywordExcelPath: string;
   sliceMusicPresetId: string;
   sliceCustomMusicPath: string;
@@ -70,6 +79,7 @@ export interface AppSettings {
   compareAutoOpenReminderDialog: boolean;
   compareShowPassedRowsAfterVerify: boolean;
   fontScale: FontScale;
+  performanceMode: PerformanceMode;
   lastSeenChangelogVersion?: string;
   everythingEsPath: string;
   sidebarCollapsed: boolean;
@@ -155,6 +165,9 @@ export interface ReviewSearchResult {
   reason: string;
   mtimeMs?: number;
   thumbnailDataUrl?: string;
+  childCount?: number;
+  coverPath?: string;
+  childrenLoaded?: boolean;
   children?: ReviewSearchResult[];
 }
 
@@ -169,6 +182,7 @@ export interface ReviewGenerationOptions {
   exaggerationLevel: number;
   sceneLevel: number;
   mentionValue: boolean;
+  copyCount: number;
   batchSeed: number;
 }
 
@@ -186,8 +200,14 @@ export interface ReviewChatPayload {
   messages: ReviewChatMessage[];
   query: string;
   images?: string[];
+  productDescription?: string;
   targetLength: number;
   thinkingMode: ReviewThinkingMode;
+  professionalLevel?: number;
+  buyerLevel?: number;
+  exaggerationLevel?: number;
+  sceneLevel?: number;
+  mentionValue?: boolean;
   customPrompt?: string;
 }
 
@@ -491,7 +511,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   videoOutputDir: "",
   ffmpegPath: "",
   videoSpeedMode: false,
+  videoScanMode: "auto",
   videoTemplate: "bos-template",
+  videoOutputSize: "auto",
+  videoQualityMode: "preserve",
   updateFeedUrl: "",
   reviewRootDir: "",
   reviewProfessionalLevel: 2,
@@ -500,6 +523,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewSceneLevel: 3,
   reviewMentionValue: true,
   reviewProductDescription: "",
+  reviewCopyCount: 6,
   titleKeywordExcelPath: DEFAULT_TITLE_KEYWORD_EXCEL_PATH,
   sliceMusicPresetId: "",
   sliceCustomMusicPath: "",
@@ -516,6 +540,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   compareAutoOpenReminderDialog: true,
   compareShowPassedRowsAfterVerify: true,
   fontScale: "normal",
+  performanceMode: "auto",
   lastSeenChangelogVersion: "",
   everythingEsPath: "",
   sidebarCollapsed: false
@@ -554,6 +579,7 @@ export function getReviewApiProfile(settings: AppSettings): ApiProfile {
 
 export function normalizeSettings(value: Partial<AppSettings> | null | undefined): AppSettings {
   const raw = value ?? {};
+  const normalizedVideoScanMode = normalizeVideoScanMode(raw.videoScanMode, Boolean(raw.videoSpeedMode));
   const legacyProfile: ApiProfile = {
     ...DEFAULT_API_PROFILE,
     apiType: (raw as unknown as Record<string, unknown>).apiType === "anthropic" ? "anthropic" : "openai",
@@ -601,8 +627,11 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     videoLibraryDir: String(raw.videoLibraryDir ?? ""),
     videoOutputDir: String(raw.videoOutputDir ?? ""),
     ffmpegPath: String(raw.ffmpegPath ?? ""),
-    videoSpeedMode: Boolean(raw.videoSpeedMode),
+    videoSpeedMode: normalizedVideoScanMode === "speed",
+    videoScanMode: normalizedVideoScanMode,
     videoTemplate: normalizeVideoTemplate(raw.videoTemplate),
+    videoOutputSize: normalizeVideoOutputSize(raw.videoOutputSize),
+    videoQualityMode: normalizeVideoQualityMode(raw.videoQualityMode),
     updateFeedUrl: String(raw.updateFeedUrl ?? ""),
     reviewRootDir: String(raw.reviewRootDir ?? ""),
     reviewProfessionalLevel: clampNumber(raw.reviewProfessionalLevel, 0, 5, DEFAULT_SETTINGS.reviewProfessionalLevel),
@@ -611,6 +640,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     reviewSceneLevel: clampNumber(raw.reviewSceneLevel, 0, 5, DEFAULT_SETTINGS.reviewSceneLevel),
     reviewMentionValue: Boolean(raw.reviewMentionValue ?? DEFAULT_SETTINGS.reviewMentionValue),
     reviewProductDescription: String(raw.reviewProductDescription ?? ""),
+    reviewCopyCount: clampNumber(raw.reviewCopyCount, 3, 12, DEFAULT_SETTINGS.reviewCopyCount),
     titleKeywordExcelPath: String(raw.titleKeywordExcelPath ?? DEFAULT_SETTINGS.titleKeywordExcelPath),
     sliceMusicPresetId: String(raw.sliceMusicPresetId ?? ""),
     sliceCustomMusicPath: String(raw.sliceCustomMusicPath ?? ""),
@@ -627,6 +657,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     compareAutoOpenReminderDialog: Boolean(raw.compareAutoOpenReminderDialog ?? DEFAULT_SETTINGS.compareAutoOpenReminderDialog),
     compareShowPassedRowsAfterVerify: Boolean(raw.compareShowPassedRowsAfterVerify ?? DEFAULT_SETTINGS.compareShowPassedRowsAfterVerify),
     fontScale: normalizeFontScale(raw.fontScale),
+    performanceMode: normalizePerformanceMode(raw.performanceMode),
     lastSeenChangelogVersion: String(raw.lastSeenChangelogVersion ?? ""),
     everythingEsPath: String(raw.everythingEsPath ?? ""),
     sidebarCollapsed: Boolean(raw.sidebarCollapsed ?? DEFAULT_SETTINGS.sidebarCollapsed)
@@ -656,8 +687,25 @@ export function normalizeVideoTemplate(value: unknown): VideoTemplateId {
   return value === "video-slice" ? "video-slice" : "bos-template";
 }
 
+function normalizeVideoScanMode(value: unknown, legacySpeedMode = false): VideoScanMode {
+  if (value === "speed" || value === "preview" || value === "auto") return value;
+  return legacySpeedMode ? "speed" : "auto";
+}
+
+function normalizeVideoOutputSize(value: unknown): VideoOutputSize {
+  return value === "portrait-1080" || value === "portrait-720" || value === "story-1080" ? value : "auto";
+}
+
+function normalizeVideoQualityMode(value: unknown): VideoQualityMode {
+  return value === "high" || value === "balanced" ? value : "preserve";
+}
+
 function normalizeFontScale(value: unknown): FontScale {
   return value === "small" || value === "large" ? value : "normal";
+}
+
+function normalizePerformanceMode(value: unknown): PerformanceMode {
+  return value === "quality" || value === "balanced" || value === "low" ? value : "auto";
 }
 
 function normalizeReviewWorkspaceMode(value: unknown): ReviewWorkspaceMode {

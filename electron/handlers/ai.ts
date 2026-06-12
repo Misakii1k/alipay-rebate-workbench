@@ -4,6 +4,7 @@ import { normalizeSettings, getActiveApiProfile } from "../../src/lib/shared";
 import { validateApiUrl } from "../utils/security";
 import { appendLog } from "../utils/logger";
 import { userDataPath } from "../utils/paths";
+import { loadSettings } from "../utils/settings";
 
 async function testModelConnectionInMain(settings: AppSettings): Promise<ModelConnectionStatus> {
   const normalized = normalizeSettings(settings);
@@ -93,6 +94,6 @@ async function listAvailableModels(settings: AppSettings): Promise<{ id: string;
  * 注册 AI 连接测试相关的 IPC handlers。
  */
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("ai:testConnection", (_event, settings: AppSettings) => testModelConnectionInMain(settings));
-  ipcMain.handle("ai:listModels", (_event, settings: AppSettings) => listAvailableModels(settings));
+  ipcMain.handle("ai:testConnection", async (_event, _settings: AppSettings) => testModelConnectionInMain(await loadSettings()));
+  ipcMain.handle("ai:listModels", async (_event, _settings: AppSettings) => listAvailableModels(await loadSettings()));
 }

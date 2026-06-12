@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   ArrowLeftRight,
   Check,
@@ -47,9 +47,18 @@ const FLOW_WORD_POSITIONS = [
 
 type TitleTab = "keywords" | "rules" | "advice";
 
-function waitForVisibleAnalysis(startedAt: number) {
+function waitForVisibleAnalysis(startedAt: number, skipDelay = false) {
+  if (skipDelay) return Promise.resolve();
   const remaining = ANALYSIS_VISIBLE_MS - (Date.now() - startedAt);
   return remaining > 0 ? new Promise((resolve) => window.setTimeout(resolve, remaining)) : Promise.resolve();
+}
+
+function shouldSkipAnalysisDelay(settings: AppSettings, resolvedPerformanceMode?: Exclude<AppSettings["performanceMode"], "auto">) {
+  const mode = settings.performanceMode ?? "auto";
+  if (mode === "low") return true;
+  if (mode === "quality" || mode === "balanced") return false;
+  if (resolvedPerformanceMode === "low") return true;
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 }
 
 function splitTitleTargets(value: string) {
@@ -63,10 +72,12 @@ function titleCandidateDisplayScore(candidate: Pick<TitleCandidate, "score" | "s
 
 export function TitleOptimizer({
   settings,
+  resolvedPerformanceMode,
   onSaveSettings,
   showToast
 }: {
   settings: AppSettings;
+  resolvedPerformanceMode?: Exclude<AppSettings["performanceMode"], "auto">;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
   showToast: (message: string) => void;
 }) {
@@ -85,6 +96,10 @@ export function TitleOptimizer({
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TitleTab>("keywords");
   const [compareCandidate, setCompareCandidate] = useState<TitleCandidate | null>(null);
+  const [extraKeywordsDraft, setExtraKeywordsDraft] = useState(settings.titleExtraKeywords);
+  const analyzeRequestRef = useRef(0);
+  const generateRequestRef = useRef(0);
+  const skipAnalysisDelay = shouldSkipAnalysisDelay(settings, resolvedPerformanceMode);
 
   const categories = keywordData?.categories ?? [];
   const selectedCategory = useMemo(
@@ -96,6 +111,29 @@ export function TitleOptimizer({
   useEffect(() => {
     void loadData();
   }, [settings.titleKeywordExcelPath]);
+
+  useEffect(() => {
+    setExtraKeywordsDraft(settings.titleExtraKeywords);
+  }, [settings.titleExtraKeywords]);
+
+  useEffect(() => {
+    if (extraKeywordsDraft === settings.titleExtraKeywords) return;
+    const timer = window.setTimeout(() => {
+      void onSaveSettings({ ...settings, titleExtraKeywords: extraKeywordsDraft });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [extraKeywordsDraft, onSaveSettings, settings]);
+
+  const saveExtraKeywordsNow = () => {
+    if (extraKeywordsDraft === settings.titleExtraKeywords) return;
+    void onSaveSettings({ ...settings, titleExtraKeywords: extraKeywordsDraft });
+  };
+
+  const settingsForTitleRun = () => {
+    const next = { ...settings, titleExtraKeywords: extraKeywordsDraft };
+    if (extraKeywordsDraft !== settings.titleExtraKeywords) void onSaveSettings(next);
+    return next;
+  };
 
   const loadData = async () => {
     setLoadingData(true);
@@ -122,31 +160,38 @@ export function TitleOptimizer({
 
   const analyze = async () => {
     const startedAt = Date.now();
+    const requestSeq = analyzeRequestRef.current + 1;
+    analyzeRequestRef.current = requestSeq;
     setAnalyzing(true);
     setError("");
     setAnalysis(null);
     try {
-      const next = await window.alipayWorkbench.analyzeTitle(settings, {
+      const runSettings = settingsForTitleRun();
+      const next = await window.alipayWorkbench.analyzeTitle(runSettings, {
         productName,
         title: currentTitle,
         categoryName: categoryName || undefined,
         strategy: "stacked-v2",
-        targetKeywords: splitTitleTargets(settings.titleExtraKeywords)
+        targetKeywords: splitTitleTargets(extraKeywordsDraft)
       });
-      await waitForVisibleAnalysis(startedAt);
+      await waitForVisibleAnalysis(startedAt, skipAnalysisDelay);
+      if (analyzeRequestRef.current !== requestSeq) return;
       setAnalysis(next);
       setActiveTab("keywords");
       if (!next.ok || next.grade === "blocked") setError(next.message);
     } catch (caught) {
-      await waitForVisibleAnalysis(startedAt);
+      await waitForVisibleAnalysis(startedAt, skipAnalysisDelay);
+      if (analyzeRequestRef.current !== requestSeq) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setAnalyzing(false);
+      if (analyzeRequestRef.current === requestSeq) setAnalyzing(false);
     }
   };
 
   const generateFromJson = async () => {
     const startedAt = Date.now();
+    const requestSeq = generateRequestRef.current + 1;
+    generateRequestRef.current = requestSeq;
     setGenerating(true);
     setError("");
     setGenerated(null);
@@ -154,46 +199,54 @@ export function TitleOptimizer({
       const parsed = JSON.parse(aiJson) as { productName?: string; category?: string };
       const nextProductName = String(parsed.productName || productName).trim();
       if (nextProductName) setProductName(nextProductName);
-      const next = await window.alipayWorkbench.generateTitleCandidates(settings, {
+      const runSettings = settingsForTitleRun();
+      const next = await window.alipayWorkbench.generateTitleCandidates(runSettings, {
         productName: nextProductName || productName,
         categoryName: categoryName || parsed.category || undefined,
         variantCount: 5,
         strategy: "stacked-v2",
-        targetKeywords: splitTitleTargets(settings.titleExtraKeywords)
+        targetKeywords: splitTitleTargets(extraKeywordsDraft)
       });
-      await waitForVisibleAnalysis(startedAt);
+      await waitForVisibleAnalysis(startedAt, skipAnalysisDelay);
+      if (generateRequestRef.current !== requestSeq) return;
       setGenerated(next);
       if (!next.ok) setError(next.message);
     } catch (caught) {
-      await waitForVisibleAnalysis(startedAt);
+      await waitForVisibleAnalysis(startedAt, skipAnalysisDelay);
+      if (generateRequestRef.current !== requestSeq) return;
       setError(caught instanceof Error ? caught.message : "商品 JSON 格式不正确，请检查引号和逗号。");
     } finally {
-      setGenerating(false);
+      if (generateRequestRef.current === requestSeq) setGenerating(false);
     }
   };
 
   const generateCandidates = async () => {
     const startedAt = Date.now();
+    const requestSeq = generateRequestRef.current + 1;
+    generateRequestRef.current = requestSeq;
     setGenerating(true);
     setError("");
     setGenerated(null);
     try {
-      const next = await window.alipayWorkbench.generateTitleCandidates(settings, {
+      const runSettings = settingsForTitleRun();
+      const next = await window.alipayWorkbench.generateTitleCandidates(runSettings, {
         productName,
         categoryName: categoryName || undefined,
         variantCount: 5,
         strategy: "stacked-v2",
-        targetKeywords: splitTitleTargets(settings.titleExtraKeywords)
+        targetKeywords: splitTitleTargets(extraKeywordsDraft)
       });
-      await waitForVisibleAnalysis(startedAt);
+      await waitForVisibleAnalysis(startedAt, skipAnalysisDelay);
+      if (generateRequestRef.current !== requestSeq) return;
       setGenerated(next);
       if (!next.ok) setError(next.message);
       showToast("已使用叠词实验版生成候选。");
     } catch (caught) {
-      await waitForVisibleAnalysis(startedAt);
+      await waitForVisibleAnalysis(startedAt, skipAnalysisDelay);
+      if (generateRequestRef.current !== requestSeq) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setGenerating(false);
+      if (generateRequestRef.current === requestSeq) setGenerating(false);
     }
   };
 
@@ -223,7 +276,10 @@ export function TitleOptimizer({
         onAnalyze={() => void analyze()}
         onReload={() => void loadData()}
         onPickExcel={() => void pickExcel()}
-        onOpenAi={() => void generateCandidates()}
+        onOpenAi={() => setAiDrawerOpen(true)}
+        extraKeywordsDraft={extraKeywordsDraft}
+        setExtraKeywordsDraft={setExtraKeywordsDraft}
+        onSaveExtraKeywords={saveExtraKeywordsNow}
         settings={settings}
         onSaveSettings={onSaveSettings}
         showToast={showToast}
@@ -236,7 +292,11 @@ export function TitleOptimizer({
         </div>
       )}
 
-      {(analyzing || generating) && <TitleAnalyzeAnimation label={analyzing ? "正在分析标题" : "正在生成候选"} />}
+      {(analyzing || generating) && (
+        skipAnalysisDelay
+          ? <TitleLoadingNotice label={analyzing ? "正在分析标题" : "正在生成候选"} />
+          : <TitleAnalyzeAnimation label={analyzing ? "正在分析标题" : "正在生成候选"} />
+      )}
 
       {analysis && !compareCandidate && (
         <TitleScorePanel
@@ -310,6 +370,9 @@ function TitleInputCard({
   onReload,
   onPickExcel,
   onOpenAi,
+  extraKeywordsDraft,
+  setExtraKeywordsDraft,
+  onSaveExtraKeywords,
   settings,
   onSaveSettings,
   showToast
@@ -331,6 +394,9 @@ function TitleInputCard({
   onReload: () => void;
   onPickExcel: () => void;
   onOpenAi: () => void;
+  extraKeywordsDraft: string;
+  setExtraKeywordsDraft: (value: string) => void;
+  onSaveExtraKeywords: () => void;
   settings: AppSettings;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
   showToast: (message: string) => void;
@@ -400,10 +466,9 @@ function TitleInputCard({
       <label className="title-v2-field">
         <span>目标搜索词（空格/逗号分隔，越靠前越重要）</span>
         <input
-          value={settings.titleExtraKeywords}
-          onChange={async (event) => {
-            await onSaveSettings({ ...settings, titleExtraKeywords: event.target.value });
-          }}
+          value={extraKeywordsDraft}
+          onChange={(event) => setExtraKeywordsDraft(event.target.value)}
+          onBlur={onSaveExtraKeywords}
           placeholder="例如：天丝莱赛尔男士裤子夏薄款 休闲裤 直筒裤"
         />
       </label>
@@ -885,6 +950,16 @@ function TitleAnalyzeAnimation({ label }: { label: string }) {
         const [x, y] = FLOW_WORD_POSITIONS[index % FLOW_WORD_POSITIONS.length];
         return <span key={word} className="title-flow-word" style={{ "--i": index, "--x": x, "--y": y } as CSSProperties}>{word}</span>;
       })}
+    </section>
+  );
+}
+
+function TitleLoadingNotice({ label }: { label: string }) {
+  return (
+    <section className="title-v2-loading-line" aria-label={label}>
+      <Loader2 className="spin" size={18} />
+      <strong>{label}</strong>
+      <span>低配模式下已关闭词语飞行动画。</span>
     </section>
   );
 }

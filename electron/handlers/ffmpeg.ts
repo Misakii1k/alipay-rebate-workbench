@@ -9,8 +9,10 @@ import type { AppSettings, FfmpegStatus } from "../../src/lib/shared";
 import { normalizeSettings } from "../../src/lib/shared";
 import { getFfmpegCandidates, resolveFfmpegPath, runProcess } from "../utils/ffmpeg";
 import { validatePathSafety, validateMediaFilePath } from "../utils/security";
+import { authorizeDirectoryCapability, isAuthorizedFfmpegPath } from "../utils/capabilities";
 import { appendLog } from "../utils/logger";
 import { userDataPath } from "../utils/paths";
+import { loadSettings } from "../utils/settings";
 
 // ============================================================================
 // 类型定义
@@ -240,7 +242,9 @@ async function autoFixFfmpeg(settings: AppSettings): Promise<AutoFixResult> {
   const currentPath = resolveFfmpegPath(settings);
   if (!currentPath) {
     const found = await searchFfmpegOnSystem();
-    if (found) {
+    if (found && !isAuthorizedFfmpegPath(found)) {
+      failed.push(`Found FFmpeg, but please confirm it through the FFmpeg picker before using it: ${found}`);
+    } else if (found) {
       settingsPatch = { ffmpegPath: found };
       fixed.push(`在系统中找到了 FFmpeg：${found}`);
     } else {
@@ -254,6 +258,7 @@ async function autoFixFfmpeg(settings: AppSettings): Promise<AutoFixResult> {
   if (settings.videoOutputDir) {
     try {
       await fs.mkdir(settings.videoOutputDir, { recursive: true });
+      authorizeDirectoryCapability("videoOutput", settings.videoOutputDir);
       const writable = await testDirectoryWritable(settings.videoOutputDir);
       if (writable) {
         fixed.push("输出目录已就绪");
@@ -295,7 +300,7 @@ async function autoFixFfmpeg(settings: AppSettings): Promise<AutoFixResult> {
  * 注册 FFmpeg 相关的 IPC handlers。
  */
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("ffmpeg:status", (_event, settings: AppSettings) => getFfmpegStatus(settings));
-  ipcMain.handle("ffmpeg:diagnose", (_event, settings: AppSettings) => diagnoseFfmpeg(settings));
-  ipcMain.handle("ffmpeg:autoFix", (_event, settings: AppSettings) => autoFixFfmpeg(normalizeSettings(settings)));
+  ipcMain.handle("ffmpeg:status", async () => getFfmpegStatus(await loadSettings()));
+  ipcMain.handle("ffmpeg:diagnose", async () => diagnoseFfmpeg(await loadSettings()));
+  ipcMain.handle("ffmpeg:autoFix", async () => autoFixFfmpeg(normalizeSettings(await loadSettings())));
 }

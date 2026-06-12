@@ -5,6 +5,7 @@ import { TEXT_RECOGNITION_PROMPT, CLOUD_REVIEW_PROMPT, FEEDBACK_LEARNING_PROMPT,
 import { validateApiUrl } from "../utils/security";
 import { appendLog } from "../utils/logger";
 import { userDataPath } from "../utils/paths";
+import { loadSettings } from "../utils/settings";
 
 // ============================================================================
 // AI API 调用
@@ -22,6 +23,7 @@ async function callChatCompletions(
   messages: Array<{ role: string; content: string }>
 ): Promise<Record<string, unknown>> {
   const profile = getActiveApiProfile(settings);
+  validateApiUrl(profile.apiBaseUrl);
   const model = profile.textModel;
   if (!model) throw new Error("未配置文本模型。");
   const maxAttempts = Math.max(1, (settings.modelRetryCount || 0) + 1);
@@ -188,13 +190,13 @@ async function learnFromFinalChoice(
 // 注册 IPC
 // ============================================================================
 export function register(ipcMain: IpcMain): void {
-  ipcMain.handle("recognition:recognizeText", (_event, text: string, settings: AppSettings) =>
-    recognizeText(text, settings)
+  ipcMain.handle("recognition:recognizeText", async (_event, text: string, _settings: AppSettings) =>
+    recognizeText(text, await loadSettings())
   );
-  ipcMain.handle("recognition:cloudReview", (_event, rawText: string, localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">, settings: AppSettings) =>
-    reviewRecognitionCloud(rawText, localResult, settings)
+  ipcMain.handle("recognition:cloudReview", async (_event, rawText: string, localResult: Pick<RecognitionResult, "account" | "name" | "confidence" | "reason">, _settings: AppSettings) =>
+    reviewRecognitionCloud(rawText, localResult, await loadSettings())
   );
-  ipcMain.handle("recognition:learnFromChoice", (_event, payload: RecognitionLearningPayload, settings: AppSettings) =>
-    learnFromFinalChoice(payload, settings)
+  ipcMain.handle("recognition:learnFromChoice", async (_event, payload: RecognitionLearningPayload, _settings: AppSettings) =>
+    learnFromFinalChoice(payload, await loadSettings())
   );
 }

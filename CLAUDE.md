@@ -24,10 +24,11 @@ npx tsc -p tsconfig.electron.json   # Electron 主进程类型检查
 ### 双进程结构
 
 ```
-electron/main.ts      → Electron 主进程（1567行）：IPC handlers、文件系统、FFmpeg、Excel 导出、剪切板
-electron/preload.ts   → contextBridge 桥接，暴露 window.alipayWorkbench API
-src/main.tsx          → React 入口，含浏览器预览时的 API mock（localStorage 降级）
-src/App.tsx           → 主组件（~950行），管理所有视图路由和全局状态
+electron/main.ts           → Electron 入口（86行）：窗口创建、菜单、自动更新、注册 IPC handlers
+electron/handlers/index.ts → 16个模块（43个handler）的统一注册入口
+electron/preload.ts        → contextBridge 桥接，暴露 window.alipayWorkbench API
+src/main.tsx               → React 入口，含浏览器预览时的 API mock（localStorage 降级）
+src/App.tsx                → 主组件（~1400行），管理所有视图路由和全局状态
 ```
 
 ### 视图路由
@@ -40,6 +41,15 @@ App.tsx 通过 `view` 状态变量切换视图，没有使用路由库：
 - `title` → `TitleOptimizer.tsx` — 标题关键词优化（Excel 数据驱动）
 - `compare` → `CompareWorkbench.tsx` — 评价返款对比
 - `settings` — 设置页（内嵌在 App.tsx 的 SettingsView 组件）
+
+### Electron IPC 模块化
+
+主进程的 43 个 IPC handler 已拆分为 16 个模块（`electron/handlers/*.ts`），每个模块导出 `register(ipcMain)` 函数和可选的 `setMainWindow()` 函数。新增 IPC 通道时：
+
+1. 在对应的 handler 模块中添加 handler 函数
+2. 在 `electron/preload.ts` 中暴露对应的 API 方法
+3. 在 `src/main.tsx` 的 mock 中添加浏览器端存根
+4. 如果是新的功能域，在 `electron/handlers/index.ts` 中注册新模块
 
 ### 共享库 (src/lib/)
 
@@ -54,9 +64,22 @@ App.tsx 通过 `view` 状态变量切换视图，没有使用路由库：
 
 preload.ts 通过 `contextBridge.exposeInMainWorld("alipayWorkbench", api)` 暴露 API。所有 IPC 通道使用 `namespace:action` 命名（如 `settings:load`、`video:renderTask`、`review:scanAssets`）。
 
+### 安全模块 (electron/utils/security.ts)
+
+提供路径安全校验、API URL 校验和输入消毒：
+- `validatePathSafety()` — 黑名单阻止系统目录，白名单限定允许目录
+- `validateMediaFilePath()` — 文件名校验仅拒绝 `<>|?*`（`path.basename()` 已剥离路径分隔符和盘符），并检查文件存在性和长度
+- `validateApiUrl()` — 强制 HTTPS（localhost/127.0.0.1 例外）
+- `sanitizeCellText()` — 防止 Excel 公式注入
+- `sanitizeEverythingQuery()` — Everything 搜索查询消毒
+
+### FFmpeg 中文路径兼容
+
+Windows 上 FFmpeg 默认使用 ANSI 编码，无法识别含中文的 UTF-8 路径。`electron/handlers/video.ts` 中的 `getShortPath()` 函数使用 Windows `Scripting.FileSystemObject` COM 将含非 ASCII 字符的路径转为 8.3 短路径（如 `C:\Users\XD8KL~1\视频\ABCD~1.MP4`），确保 FFmpeg 能正确处理中文文件路径。
+
 ### 样式
 
-单文件 `src/styles.css`（~3400 行），使用 CSS 自定义属性实现深/浅主题切换。浅色模式通过 `[data-theme="light"]` 选择器覆盖变量和组件样式。主题切换使用 View Transition API 实现水滴扩散动画（`::view-transition-old/new(root)` + `clip-path: circle()` 动画）。毛玻璃风格（backdrop-filter + 半透明背景）。无 CSS 框架。
+单文件 `src/styles.css`（~6000 行），使用 CSS 自定义属性实现深/浅主题切换。浅色模式通过 `[data-theme="light"]` 选择器覆盖变量和组件样式。主题切换使用 View Transition API 实现水滴扩散动画（`::view-transition-old/new(root)` + `clip-path: circle()` 动画）。毛玻璃风格（backdrop-filter + 半透明背景）。无 CSS 框架。
 
 浅色主题色调：暖米白纸感底色 + 陶土橙强调色（`--green: #9b4d2f`、`--gold: #b8793a`），不是绿色。修改浅色模式时不要使用绿色系硬编码值（如 `#059669`、`rgba(4,120,87,...)`），应使用 `var(--green)` / `var(--green-dim)` 或对应的棕色系值。
 

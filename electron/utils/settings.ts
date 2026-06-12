@@ -3,6 +3,14 @@ import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { AppSettings } from "../../src/lib/shared";
 import { DEFAULT_SETTINGS, normalizeSettings } from "../../src/lib/shared";
+import {
+  authorizeSettingsCapabilities,
+  isAuthorizedExactCapability,
+  isAuthorizedFfmpegPath,
+  isAuthorizedEverythingPath,
+  isAuthorizedRoot,
+  assertAuthorizedTitleExcel
+} from "./capabilities";
 import { appendLog } from "./logger";
 import { userDataPath, ensureUserDataDir } from "./paths";
 
@@ -10,11 +18,13 @@ import { userDataPath, ensureUserDataDir } from "./paths";
 // 常量与类型
 // ============================================================================
 export const SENSITIVE_PROFILE_FIELDS = ["apiKey"] as const;
-export const SENSITIVE_ROOT_FIELDS = ["fixedTailAccount", "fixedTailName"] as const;
+export const SENSITIVE_ROOT_FIELDS = ["apiKey", "fixedTailAccount", "fixedTailName"] as const;
 
 export interface EncryptedField {
   __enc: string;
 }
+
+let settingsCache: AppSettings | null = null;
 
 // ============================================================================
 // 加密/解密函数
@@ -53,6 +63,8 @@ export function decryptField(field: unknown): string {
 }
 
 export function hasPlaintextSecrets(raw: Record<string, unknown>): boolean {
+  const rootApiKey = raw.apiKey;
+  if (typeof rootApiKey === "string" && rootApiKey.length > 0) return true;
   const profiles = Array.isArray(raw.apiProfiles) ? raw.apiProfiles : [];
   for (const profile of profiles) {
     if (typeof profile === "object" && profile !== null) {
@@ -105,36 +117,67 @@ export function decryptSettingsFields(raw: Record<string, unknown>): Record<stri
   return decrypted;
 }
 
+function sanitizeCapabilityFields(settings: AppSettings): AppSettings {
+  const next = normalizeSettings(settings);
+  return normalizeSettings({
+    ...next,
+    reviewRootDir: next.reviewRootDir && isAuthorizedRoot("reviewRoot", next.reviewRootDir) ? next.reviewRootDir : "",
+    videoLibraryDir: next.videoLibraryDir && isAuthorizedRoot("videoLibrary", next.videoLibraryDir) ? next.videoLibraryDir : "",
+    videoOutputDir: next.videoOutputDir && isAuthorizedRoot("videoOutput", next.videoOutputDir) ? next.videoOutputDir : "",
+    titleKeywordExcelPath: (() => {
+      if (!next.titleKeywordExcelPath || !isAuthorizedExactCapability("titleExcel", next.titleKeywordExcelPath)) return "";
+      try {
+        assertAuthorizedTitleExcel(next.titleKeywordExcelPath);
+        return next.titleKeywordExcelPath;
+      } catch {
+        return "";
+      }
+    })(),
+    ffmpegPath: next.ffmpegPath && isAuthorizedFfmpegPath(next.ffmpegPath) ? next.ffmpegPath : "",
+    everythingEsPath: next.everythingEsPath && isAuthorizedEverythingPath(next.everythingEsPath) ? next.everythingEsPath : ""
+  });
+}
+
 // ============================================================================
 // 设置加载/保存
 // ============================================================================
 export async function loadSettings(): Promise<AppSettings> {
+  if (settingsCache) return settingsCache;
   await ensureUserDataDir();
   const filePath = userDataPath("settings.json");
-  if (!existsSync(filePath)) return DEFAULT_SETTINGS;
+  if (!existsSync(filePath)) {
+    settingsCache = DEFAULT_SETTINGS;
+    authorizeSettingsCapabilities(settingsCache, "load");
+    return settingsCache;
+  }
   try {
     const raw = await fs.readFile(filePath, "utf-8");
     const parsed = JSON.parse(raw);
     // 解密敏感字段（兼容旧版明文数据）
     const decrypted = decryptSettingsFields(parsed);
     const settings = normalizeSettings(decrypted);
+    authorizeSettingsCapabilities(settings, "load");
     // 迁移：如果是旧版明文，回写加密版本
     if (hasPlaintextSecrets(parsed)) {
       await saveSettings(settings);
     }
+    settingsCache = settings;
     return settings;
   } catch {
     await appendLog("error", "读取设置失败，已回退默认设置", undefined, userDataPath);
-    return DEFAULT_SETTINGS;
+    settingsCache = DEFAULT_SETTINGS;
+    return settingsCache;
   }
 }
 
 export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
   await ensureUserDataDir();
-  const next = normalizeSettings(settings);
+  authorizeSettingsCapabilities(settings, "save");
+  const next = sanitizeCapabilityFields(settings);
 
   // 检查是否有敏感数据需要保存
-  const hasSensitiveData = next.apiProfiles.some((p) => p.apiKey.trim().length > 0) ||
+  const hasSensitiveData = next.apiKey.trim().length > 0 ||
+    next.apiProfiles.some((p) => p.apiKey.trim().length > 0) ||
     next.fixedTailAccount.trim().length > 0 ||
     next.fixedTailName.trim().length > 0;
 
@@ -154,5 +197,10 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
   // 加密敏感字段后写入磁盘
   const encrypted = encryptSettingsFields(next);
   await fs.writeFile(userDataPath("settings.json"), JSON.stringify(encrypted, null, 2), "utf-8");
+  settingsCache = next;
   return next;
+}
+
+export function clearSettingsCache(): void {
+  settingsCache = null;
 }

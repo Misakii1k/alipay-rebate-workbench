@@ -1,7 +1,6 @@
 import { app, dialog, type IpcMain, type BrowserWindow } from "electron";
 import path from "node:path";
 import { existsSync } from "node:fs";
-import ExcelJS from "exceljs";
 import type { ExportPayload, ExportResult } from "../../src/lib/shared";
 import { DEFAULT_FIXED_TAIL_ROW } from "../../src/lib/shared";
 import { sanitizeCellText } from "../utils/security";
@@ -16,6 +15,10 @@ function sanitizeFileName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
 }
 
+function hasExportRowValue(row: { account?: string; name?: string; amount?: string; remark?: string }): boolean {
+  return Boolean(row.account?.trim() || row.name?.trim() || row.amount?.trim() || row.remark?.trim());
+}
+
 async function exportWorkbook(payload: ExportPayload): Promise<ExportResult> {
   try {
     const safeName = sanitizeFileName(payload.defaultFileName);
@@ -27,6 +30,7 @@ async function exportWorkbook(payload: ExportPayload): Promise<ExportResult> {
     const saveResult = mainWindow ? await dialog.showSaveDialog(mainWindow, dialogOptions) : await dialog.showSaveDialog(dialogOptions);
     if (saveResult.canceled || !saveResult.filePath) return { canceled: true };
 
+    const ExcelJS = (await import("exceljs")).default;
     const workbook = new ExcelJS.Workbook();
     const templateCandidates = [path.join(app.getAppPath(), "assets", "alipay-template.xlsx"), path.join(process.resourcesPath, "assets", "alipay-template.xlsx")];
     const templatePath = templateCandidates.find((candidate) => existsSync(candidate));
@@ -34,9 +38,10 @@ async function exportWorkbook(payload: ExportPayload): Promise<ExportResult> {
     await workbook.xlsx.readFile(templatePath);
     const worksheet = workbook.worksheets[0];
     const startRow = 3;
+    const tailRow = payload.tailRow ?? DEFAULT_FIXED_TAIL_ROW;
     const rows = [
       ...payload.rows.map((row) => ({ account: row.account, name: row.name, amount: row.amount, remark: row.remark })),
-      payload.tailRow ?? DEFAULT_FIXED_TAIL_ROW
+      ...(hasExportRowValue(tailRow) ? [tailRow] : [])
     ];
 
     for (let index = 0; index < rows.length; index += 1) {

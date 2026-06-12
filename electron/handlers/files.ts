@@ -1,10 +1,21 @@
 import { dialog, type IpcMain, type BrowserWindow } from "electron";
-import type { SelectFilesOptions, SelectPathResult } from "../../src/lib/shared";
+import path from "node:path";
+import type { DirectoryCapabilityKind, SelectFilesOptions, SelectPathResult } from "../../src/lib/shared";
+import { authorizeDirectoryCapability, authorizeFileCapability } from "../utils/capabilities";
+import { authorizeMediaRoot } from "./media";
 
 let mainWindow: BrowserWindow | null = null;
 
 export function setMainWindow(window: BrowserWindow | null): void {
   mainWindow = window;
+}
+
+function safeAuthorizeMediaRoot(root: string): void {
+  try {
+    authorizeMediaRoot(root);
+  } catch {
+    // Selection still returns the path; preview IPC will refuse unsafe roots later.
+  }
 }
 
 async function selectFiles(request: SelectFilesOptions): Promise<SelectPathResult> {
@@ -23,15 +34,28 @@ async function selectFiles(request: SelectFilesOptions): Promise<SelectPathResul
     filters
   } satisfies Electron.OpenDialogOptions;
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+  if (request.kind === "image") {
+    for (const filePath of result.filePaths) safeAuthorizeMediaRoot(path.dirname(filePath));
+  }
+  if (request.kind === "video" || request.kind === "audio") {
+    for (const filePath of result.filePaths) safeAuthorizeMediaRoot(path.dirname(filePath));
+  }
+  if (request.kind === "ffmpeg") {
+    for (const filePath of result.filePaths) authorizeFileCapability("ffmpeg", filePath);
+  }
   return { canceled: result.canceled, paths: result.filePaths };
 }
 
-async function selectDirectory(title: string): Promise<SelectPathResult> {
+async function selectDirectory(title: string, kind: DirectoryCapabilityKind = "mediaRoot"): Promise<SelectPathResult> {
   const dialogOptions = {
     title,
     properties: ["openDirectory", "createDirectory"]
   } satisfies Electron.OpenDialogOptions;
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+  for (const dir of result.filePaths) {
+    safeAuthorizeMediaRoot(dir);
+    authorizeDirectoryCapability(kind, dir);
+  }
   return { canceled: result.canceled, paths: result.filePaths };
 }
 
@@ -40,5 +64,5 @@ async function selectDirectory(title: string): Promise<SelectPathResult> {
  */
 export function register(ipcMain: IpcMain): void {
   ipcMain.handle("files:select", (_event, options: SelectFilesOptions) => selectFiles(options));
-  ipcMain.handle("directory:select", (_event, title: string) => selectDirectory(title));
+  ipcMain.handle("directory:select", (_event, title: string, kind?: DirectoryCapabilityKind) => selectDirectory(title, kind));
 }
