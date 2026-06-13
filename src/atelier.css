@@ -698,7 +698,7 @@ html[data-ui-design="atelier"][data-theme="light"] select,
 html[data-ui-design="atelier"][data-theme="light"] .title-v2-textarea,
 html[data-ui-design="atelier"][data-theme="light"] .title-v2-json-box,
 html[data-ui-design="atelier"][data-theme="light"] .review-v2-chat-input {
-  background: rgba(255, 252, 244, 0.72);
+  background: rgba(255, 252, 244, 0.92);
 }
 
 html[data-ui-design="atelier"] textarea:focus,
@@ -1171,34 +1171,34 @@ html[data-ui-design="atelier"][data-theme="light"] .main {
 
 html[data-ui-design="atelier"][data-theme="light"] .sidebar {
   background:
-    radial-gradient(circle at 18% 0%, rgba(214, 178, 111, 0.20), transparent 28%),
-    radial-gradient(circle at 110% 92%, rgba(47, 113, 85, 0.24), transparent 34%),
-    linear-gradient(180deg, #27382e, #18231e 78%);
-  border-color: rgba(255, 249, 237, 0.14);
-  color: rgba(255, 249, 237, 0.92);
-  box-shadow: 0 24px 60px rgba(31, 45, 37, 0.30);
+    radial-gradient(circle at 18% 0%, rgba(214, 178, 111, 0.12), transparent 28%),
+    radial-gradient(circle at 110% 92%, rgba(47, 113, 85, 0.14), transparent 34%),
+    linear-gradient(180deg, #e8e2d4, #dcd5c4 78%);
+  border-color: rgba(65, 54, 38, 0.12);
+  color: rgba(65, 54, 38, 0.92);
+  box-shadow: 0 24px 60px rgba(31, 45, 37, 0.12);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .brand {
-  border-bottom-color: rgba(255, 249, 237, 0.15);
+  border-bottom-color: rgba(65, 54, 38, 0.12);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .brand strong {
-  color: #fff8eb;
+  color: #312a1e;
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .brand span {
-  color: rgba(255, 249, 237, 0.52);
+  color: rgba(65, 54, 38, 0.52);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .brand-mark {
-  background: linear-gradient(135deg, rgba(255, 249, 237, 0.94), rgba(214, 178, 111, 0.22));
-  border-color: rgba(255, 249, 237, 0.22);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
+  background: linear-gradient(135deg, rgba(65, 54, 38, 0.94), rgba(214, 178, 111, 0.22));
+  border-color: rgba(65, 54, 38, 0.22);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .brand-glyph-card {
-  fill: rgba(255, 249, 237, 0.96);
+  fill: rgba(65, 54, 38, 0.96);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .brand-glyph-line.main {
@@ -1212,45 +1212,45 @@ html[data-ui-design="atelier"][data-theme="light"] .brand-glyph-dot {
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .nav-item {
-  color: rgba(255, 249, 237, 0.66);
+  color: rgba(65, 54, 38, 0.66);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .nav-item:hover {
-  color: #fff8eb;
-  background: rgba(255, 249, 237, 0.075);
-  border-color: rgba(255, 249, 237, 0.13);
+  color: #312a1e;
+  background: rgba(65, 54, 38, 0.055);
+  border-color: rgba(65, 54, 38, 0.10);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .nav-item.active {
-  color: #fff8eb;
+  color: #312a1e;
   background:
     linear-gradient(90deg, rgba(214, 178, 111, 0.18), rgba(47, 113, 85, 0.14)),
-    rgba(255, 249, 237, 0.075);
-  border-color: rgba(214, 178, 111, 0.32);
+    rgba(65, 54, 38, 0.055);
+  border-color: rgba(47, 113, 85, 0.32);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .nav-item.active::before {
-  background: #d6b26f;
+  background: #2f7155;
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .bottom-actions {
   padding-top: 12px;
-  border-top: 1px dashed rgba(255, 249, 237, 0.16);
+  border-top: 1px dashed rgba(65, 54, 38, 0.12);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .bottom-btn,
 html[data-ui-design="atelier"][data-theme="light"] .sidebar-collapse {
-  background: rgba(255, 249, 237, 0.085);
-  border-color: rgba(255, 249, 237, 0.15);
-  color: rgba(255, 249, 237, 0.74);
+  background: rgba(65, 54, 38, 0.055);
+  border-color: rgba(65, 54, 38, 0.12);
+  color: rgba(65, 54, 38, 0.70);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .bottom-btn:hover,
 html[data-ui-design="atelier"][data-theme="light"] .sidebar-collapse:hover,
 html[data-ui-design="atelier"][data-theme="light"] .bottom-btn.active {
-  color: #fff8eb;
-  background: rgba(214, 178, 111, 0.14);
-  border-color: rgba(214, 178, 111, 0.32);
+  color: #312a1e;
+  background: rgba(47, 113, 85, 0.10);
+  border-color: rgba(47, 113, 85, 0.28);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .topbar {
@@ -1319,22 +1319,22 @@ html[data-ui-design="atelier"][data-theme="light"] .home-hero-bg::after {
   left: 38px;
   right: auto;
   bottom: 26px;
-  color: rgba(255, 249, 237, 0.08);
+  color: rgba(65, 54, 38, 0.08);
   text-align: left;
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .home-hero .eyebrow {
-  color: #d6b26f;
+  color: #aa6f2d;
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .home-hero h1 {
   max-width: 720px;
-  color: #fff8eb;
-  text-shadow: 0 12px 38px rgba(0, 0, 0, 0.18);
+  color: #312a1e;
+  text-shadow: none;
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .home-hero p:not(.eyebrow) {
-  color: rgba(255, 249, 237, 0.66);
+  color: rgba(65, 54, 38, 0.66);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .home-metrics {
@@ -1390,10 +1390,10 @@ html[data-ui-design="atelier"][data-theme="light"] .bento-card:hover {
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .bento-icon {
-  background: #24362c;
-  border-color: rgba(36, 54, 44, 0.16);
-  color: #d6b26f;
-  box-shadow: 0 10px 24px rgba(31, 45, 37, 0.16);
+  background: #e8e2d4;
+  border-color: rgba(65, 54, 38, 0.12);
+  color: #2f7155;
+  box-shadow: 0 10px 24px rgba(31, 45, 37, 0.08);
 }
 
 html[data-ui-design="atelier"][data-theme="light"] .bento-body h2 {
