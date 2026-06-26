@@ -60,9 +60,10 @@ import {
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.1";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "1.0.1 新增 Apple/Claude 双主题切换，优化各工具模块界面细节与交互体验。",
   "1.0.0 正式发布：恢复识别成功波纹提醒动画；视频新增 1440×1920 高清竖图尺寸并修复 H.264 输出偏黄问题。",
   "0.11.4 低配流畅度收口：收评文件夹改为展开时懒加载，连续收评/视频扫描会取消旧 worker；视频智能扫描新增自动/极速/标准三态，对比工具大名单分页渲染。",
   "0.11.3 低配流畅度收口：返款预览分页渲染，视频候选和任务队列窗口化；低配模式下智能扫描自动跳过候选缩略图，极速模式状态更清晰。",
