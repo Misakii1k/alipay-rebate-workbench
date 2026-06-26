@@ -1,0 +1,261 @@
+{
+  "data": [
+    {
+      "id": "page-dashboard",
+      "title": "工具首页",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782518000000,
+      "canvasData": {
+        "x": 620,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/dashboard.html",
+        "interactions": [
+          {
+            "domId": "nav-rebate",
+            "targetPageId": "page-rebate"
+          },
+          {
+            "domId": "nav-video",
+            "targetPageId": "page-video"
+          },
+          {
+            "domId": "nav-review",
+            "targetPageId": "page-review"
+          },
+          {
+            "domId": "nav-title",
+            "targetPageId": "page-title"
+          },
+          {
+            "domId": "nav-compare",
+            "targetPageId": "page-rebate",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings",
+            "hideEdge": true
+          },
+          {
+            "domId": "card-rebate",
+            "targetPageId": "page-rebate"
+          },
+          {
+            "domId": "card-video",
+            "targetPageId": "page-video"
+          },
+          {
+            "domId": "card-review",
+            "targetPageId": "page-review"
+          },
+          {
+            "domId": "card-title",
+            "targetPageId": "page-title"
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-rebate",
+      "title": "支付宝返款",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782518001000,
+      "canvasData": {
+        "x": 0,
+        "y": 377,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/rebate.html",
+        "interactions": [
+          {
+            "domId": "nav-home",
+            "targetPageId": "page-dashboard"
+          },
+          {
+            "domId": "nav-video",
+            "targetPageId": "page-video",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-review",
+            "targetPageId": "page-review",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-title",
+            "targetPageId": "page-title",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings",
+            "hideEdge": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-video",
+      "title": "视频批量剪辑",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782518002000,
+      "canvasData": {
+        "x": 0,
+        "y": 2162,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/video.html",
+        "interactions": [
+          {
+            "domId": "nav-home",
+            "targetPageId": "page-dashboard"
+          },
+          {
+            "domId": "nav-review",
+            "targetPageId": "page-review",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-title",
+            "targetPageId": "page-title",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings",
+            "hideEdge": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-review",
+      "title": "收评助手",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782518003000,
+      "canvasData": {
+        "x": 0,
+        "y": 2539,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/review.html",
+        "interactions": [
+          {
+            "domId": "nav-home",
+            "targetPageId": "page-dashboard"
+          },
+          {
+            "domId": "nav-video",
+            "targetPageId": "page-video",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-title",
+            "targetPageId": "page-title",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings",
+            "hideEdge": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-title",
+      "title": "标题词优化",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782518004000,
+      "canvasData": {
+        "x": 0,
+        "y": 2916,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/title.html",
+        "interactions": [
+          {
+            "domId": "nav-home",
+            "targetPageId": "page-dashboard"
+          },
+          {
+            "domId": "nav-video",
+            "targetPageId": "page-video",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-review",
+            "targetPageId": "page-review",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-settings",
+            "targetPageId": "page-settings",
+            "hideEdge": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-settings",
+      "title": "全局设置",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1782518005000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/settings.html",
+        "interactions": [
+          {
+            "domId": "nav-home",
+            "targetPageId": "page-dashboard"
+          },
+          {
+            "domId": "nav-video",
+            "targetPageId": "page-video",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-review",
+            "targetPageId": "page-review",
+            "hideEdge": true
+          },
+          {
+            "domId": "nav-title",
+            "targetPageId": "page-title",
+            "hideEdge": true
+          }
+        ]
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "电商运营工具箱 - Apple 设计",
+    "designLibrary": {
+      "name": "苹果",
+      "id": "dl_builtin_apple",
+      "version": null,
+      "scope": "built-in-global",
+      "path": "c:\\Users\\87850\\.trae-cn\\design_libraries\\dl_builtin_apple",
+      "versionSource": "metadata.json"
+    }
+  }
+}

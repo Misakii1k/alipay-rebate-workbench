@@ -4,10 +4,10 @@ import App from "./App";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/noto-sans-sc";
 import "./styles.css";
-import "./atelier.css";
+import "./apple.css";
 import { DEFAULT_SETTINGS, DEFAULT_WORKBENCH_STATE, normalizeSettings } from "./lib/shared";
 
-document.documentElement.setAttribute("data-ui-design", "atelier");
+document.documentElement.setAttribute("data-ui-design", "claude");
 localStorage.removeItem("app-ui-design");
 
 if (!window.alipayWorkbench) {

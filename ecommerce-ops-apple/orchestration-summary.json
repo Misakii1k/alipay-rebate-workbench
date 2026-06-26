@@ -1,0 +1,141 @@
+{
+  "project": {
+    "name": "电商运营工具箱 - Apple 设计",
+    "operation": "create",
+    "deviceType": "desktop",
+    "operatingMode": "library-bound",
+    "designRead": "desktop dashboard app / internal ops users / calm editorial / information-dense / no generic gradient hero",
+    "designDials": {
+      "layoutVariance": 2,
+      "motionIntensity": 1,
+      "visualDensity": 3
+    },
+    "designDecisionSummary": "Apple HIG-inspired dark dashboard with Pinguo Blue #0066cc accent, DM Sans type, 1.2rem radius, whisper-light shadows, frosted glass surfaces, dark sidebar. Restraint mode: borders before shadows, max two hues per page.",
+    "styleContinuityAnchors": {
+      "colorSystem": "Pinguo Blue #0066cc primary, Space Black #0a0a0a backgrounds, Silver Mist #f5f5f7 light surfaces, Ink Gray #3a3a3c secondary text",
+      "shapeSystem": "1.2rem global radius, pill buttons, 8px small controls, 12px cards",
+      "typographySystem": "DM Sans for all interface, JetBrains Mono for technical data, 72-96px hero at 600 weight, 14-16px body at 400",
+      "spacingSystem": "0.24rem base, scale 4-8-12-16-24-32-48-64, generous whitespace",
+      "componentLanguage": "border-defined cards, capsule buttons, subtle focus rings, frosted glass panels",
+      "surfaceAndDepth": "border-first, 1px borders, whisper shadows, backdrop-filter blur for overlays",
+      "interactionTone": "subtle brightness shift on hover, smooth cubic-bezier transitions"
+    }
+  },
+  "designSource": {
+    "operatingMode": "library-bound",
+    "libraryIdentity": {
+      "name": "苹果",
+      "id": "dl_builtin_apple",
+      "version": null,
+      "scope": "built-in-global",
+      "path": "c:\\Users\\87850\\.trae-cn\\design_libraries\\dl_builtin_apple",
+      "versionSource": "metadata.json"
+    },
+    "iconAssets": {
+      "source": "assets/icons",
+      "projectIconDir": "assets/icons/dl_builtin_apple",
+      "libraryKey": "dl_builtin_apple",
+      "renderMethod": "css-mask",
+      "pathTemplate": "../assets/icons/dl_builtin_apple/{name}.svg",
+      "availableNames": ["arrow-down", "arrow-left", "arrow-right", "arrow-up", "box", "check", "chevron-down", "chevron-left", "chevron-right", "chevron-up", "chevrons-down-up", "chevrons-up-down", "circle-alert", "circle-check", "circle-minus", "circle-pause", "circle-play", "circle-plus", "circle-question-mark", "external-link", "file", "folder-open", "folder", "funnel", "grip", "heart", "house", "mail", "map-pin", "message-circle-more", "mouse-pointer-click", "pen-line", "send-horizontal", "star", "tag", "thumbs-down", "thumbs-up", "trash-2", "triangle-alert", "user"],
+      "totalCount": 40,
+      "coloringRule": "currentColor by default"
+    }
+  },
+  "pages": [
+    {
+      "nodeId": "page-dashboard",
+      "title": "工具首页",
+      "htmlSrc": "pages/dashboard.html",
+      "pageIndex": 1,
+      "pageType": "information-dense",
+      "visualNorthStar": "Calm editorial dashboard with generous whitespace, bento card grid, subtle metrics, no visual clutter",
+      "continuityAnchors": {
+        "sidebar": "Dark sidebar with blue active state, 248px width",
+        "surfaceModel": "Border-defined cards on dark background, 1px borders",
+        "typeScale": "DM Sans, 600 for headings, 400 for body"
+      }
+    },
+    {
+      "nodeId": "page-rebate",
+      "title": "支付宝返款",
+      "htmlSrc": "pages/rebate.html",
+      "pageIndex": 2,
+      "pageType": "task-driven",
+      "visualNorthStar": "Clean workspace with table, import area, action buttons — calm and precise",
+      "continuityAnchors": {
+        "sidebar": "Dark sidebar with blue active state, 248px width",
+        "surfaceModel": "Border-defined cards on dark background",
+        "typeScale": "DM Sans, 600 for headings, 400 for body"
+      }
+    },
+    {
+      "nodeId": "page-video",
+      "title": "视频批量剪辑",
+      "htmlSrc": "pages/video.html",
+      "pageIndex": 3,
+      "pageType": "task-driven",
+      "visualNorthStar": "Video editing workspace with template list and preview, structured layout",
+      "continuityAnchors": {
+        "sidebar": "Dark sidebar with blue active state, 248px width",
+        "surfaceModel": "Border-defined cards on dark background",
+        "typeScale": "DM Sans, 600 for headings, 400 for body"
+      }
+    },
+    {
+      "nodeId": "page-review",
+      "title": "收评助手",
+      "htmlSrc": "pages/review.html",
+      "pageIndex": 4,
+      "pageType": "task-driven",
+      "visualNorthStar": "AI chat interface with iMessage-style bubbles, search panel, clean layout",
+      "continuityAnchors": {
+        "sidebar": "Dark sidebar with blue active state, 248px width",
+        "surfaceModel": "Border-defined cards on dark background",
+        "typeScale": "DM Sans, 600 for headings, 400 for body"
+      }
+    },
+    {
+      "nodeId": "page-title",
+      "title": "标题词优化",
+      "htmlSrc": "pages/title.html",
+      "pageIndex": 5,
+      "pageType": "task-driven",
+      "visualNorthStar": "Title analysis workspace with score ring, keyword chips, clean forms",
+      "continuityAnchors": {
+        "sidebar": "Dark sidebar with blue active state, 248px width",
+        "surfaceModel": "Border-defined cards on dark background",
+        "typeScale": "DM Sans, 600 for headings, 400 for body"
+      }
+    },
+    {
+      "nodeId": "page-settings",
+      "title": "全局设置",
+      "htmlSrc": "pages/settings.html",
+      "pageIndex": 6,
+      "pageType": "information-dense",
+      "visualNorthStar": "Settings hub with grouped sections, iOS-style toggles, clean hierarchy",
+      "continuityAnchors": {
+        "sidebar": "Dark sidebar with blue active state, 248px width",
+        "surfaceModel": "Border-defined cards on dark background",
+        "typeScale": "DM Sans, 600 for headings, 400 for body"
+      }
+    }
+  ],
+  "assets": [],
+  "wiringPlan": [
+    { "from": "page-dashboard", "domId": "nav-rebate", "to": "page-rebate", "visible": true },
+    { "from": "page-dashboard", "domId": "nav-video", "to": "page-video", "visible": true },
+    { "from": "page-dashboard", "domId": "nav-review", "to": "page-review", "visible": true },
+    { "from": "page-dashboard", "domId": "nav-title", "to": "page-title", "visible": true },
+    { "from": "page-dashboard", "domId": "card-rebate", "to": "page-rebate", "visible": true },
+    { "from": "page-dashboard", "domId": "card-video", "to": "page-video", "visible": true },
+    { "from": "page-dashboard", "domId": "card-review", "to": "page-review", "visible": true },
+    { "from": "page-dashboard", "domId": "card-title", "to": "page-title", "visible": true },
+    { "from": "page-rebate", "domId": "nav-home", "to": "page-dashboard", "visible": true },
+    { "from": "page-video", "domId": "nav-home", "to": "page-dashboard", "visible": true },
+    { "from": "page-review", "domId": "nav-home", "to": "page-dashboard", "visible": true },
+    { "from": "page-title", "domId": "nav-home", "to": "page-dashboard", "visible": true },
+    { "from": "page-settings", "domId": "nav-home", "to": "page-dashboard", "visible": true }
+  ]
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
+import { useEffect, useMemo, useRef, useState, lazy, Suspense, type RefObject } from "react";
 import {
   ArrowRight,
   Check,
@@ -167,6 +167,46 @@ function mergeLearningNotes(existing: string, note: string): string {
   return [cleaned, ...lines].slice(0, 20).join("\n");
 }
 
+// === UI Polish: Focus Trap Hook ===
+function useFocusTrap(open: boolean, ref: RefObject<HTMLElement>, onClose?: () => void) {
+  useEffect(() => {
+    if (!open || !ref.current) return;
+    const container = ref.current;
+    const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"]), [role="button"]';
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+
+    // 聚焦首个可聚焦元素
+    const focusables = () => Array.from(container.querySelectorAll<HTMLElement>(focusableSelector));
+    const first = focusables()[0];
+    if (first) first.focus();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && onClose) {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === firstItem) {
+        e.preventDefault();
+        lastItem.focus();
+      } else if (!e.shiftKey && document.activeElement === lastItem) {
+        e.preventDefault();
+        firstItem.focus();
+      }
+    };
+
+    container.addEventListener("keydown", handleKeyDown);
+    return () => {
+      container.removeEventListener("keydown", handleKeyDown);
+      if (previouslyFocused) previouslyFocused.focus();
+    };
+  }, [open, ref, onClose]);
+}
+
 export default function App() {
   const [view, setView] = useState<ViewKey>("home");
   const [theme, setTheme] = useState<"dark" | "light">(() => (localStorage.getItem("app-theme") === "light" ? "light" : "dark"));
@@ -187,6 +227,7 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [videoState, setVideoState] = useState<VideoWorkbenchState | null>(null);
   const [recognitionPulse, setRecognitionPulse] = useState(0);
+  const [entryBurst, setEntryBurst] = useState(0);
   const lastClipboardSignature = useRef("");
   const autoRecognizingRef = useRef(false);
   const skipAutoRecognizeRef = useRef(false);
@@ -487,6 +528,7 @@ export default function App() {
         )
       );
       setRecognitionPulse((value) => value + 1);
+      setEntryBurst((value) => value + 1);
       showToast(`已识别：${result.name} / ${result.account}`);
       void runCloudReview(recognizedIndex, rawText, {
         account: result.account,
@@ -777,7 +819,7 @@ export default function App() {
             const settingsItem = toolNavItems.find((item) => item.key === "settings")!;
             const Icon = settingsItem.icon;
             return (
-              <button className={clsx("bottom-btn", activeTool === "settings" && "active")} title={settingsItem.desc} onClick={() => openTool("settings")}>
+              <button className={clsx("bottom-btn", activeTool === "settings" && "active")} title={settingsItem.desc} aria-label={settingsItem.label} onClick={() => openTool("settings")}>
                 <Icon size={16} />
               </button>
             );
@@ -832,6 +874,12 @@ export default function App() {
 
         {view === "entry" && (
           <section className="entry-layout">
+            {entryBurst > 0 && (
+              <div className="entry-burst-overlay" key={`burst-${entryBurst}`} aria-hidden="true">
+                <span className="entry-burst-ripple" />
+                <span className="entry-burst-ripple entry-burst-ripple-2" />
+              </div>
+            )}
             <Panel title="当前用户" icon={Clipboard} className="hero-panel">
               {currentRow ? (
                 <>
@@ -1275,11 +1323,11 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
               <div key={profile.id} className={clsx("api-profile-tab", profile.id === activeProfile.id && "active")}>
                 <button type="button" className="api-profile-tab-label" onClick={() => switchProfile(profile.id)} title="切换 API 配置">{profile.name}</button>
                 {draft.apiProfiles.length > 1 && (
-                  <button type="button" className="api-profile-tab-delete" onClick={() => deleteProfile(profile.id)} title="删除此配置"><X size={12} /></button>
+                  <button type="button" className="api-profile-tab-delete" onClick={() => deleteProfile(profile.id)} title="删除此配置" aria-label={`删除配置 ${profile.name}`}><X size={12} /></button>
                 )}
               </div>
             ))}
-            <button type="button" className="api-profile-tab-label" onClick={addProfile} title="新增配置" style={{ fontWeight: 400 }}><Plus size={14} /></button>
+            <button type="button" className="api-profile-tab-label" onClick={addProfile} title="新增配置" aria-label="新增 API 配置" style={{ fontWeight: 400 }}><Plus size={14} /></button>
           </div>
         </div>
 
@@ -1299,7 +1347,7 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
 
         <label><span>API Base URL</span><input value={activeProfile.apiBaseUrl} onChange={(event) => setProfile({ apiBaseUrl: event.target.value })} /></label>
 
-        <label><span>API Key</span><div className="secret-input"><input type={showApiKey ? "text" : "password"} value={activeProfile.apiKey} onChange={(event) => setProfile({ apiKey: event.target.value })} /><button type="button" onClick={() => setShowApiKey((value) => !value)} title={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+        <label><span>API Key</span><div className="secret-input"><input type={showApiKey ? "text" : "password"} value={activeProfile.apiKey} onChange={(event) => setProfile({ apiKey: event.target.value })} /><button type="button" onClick={() => setShowApiKey((value) => !value)} title={showApiKey ? "隐藏 API Key" : "显示 API Key"} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
 
         {/* 文本模型 */}
         <label><span>文本模型</span></label>
@@ -1378,7 +1426,7 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
         <label><span>已学习识别规则</span><textarea value={draft.learningPromptNotes} onChange={(event) => set("learningPromptNotes", event.target.value)} placeholder="用户采纳或手动修正后，大模型总结的可复用识别规则会保存在这里。" /></label>
         <button className="secondary-action light" onClick={() => set("learningPromptNotes", "")} title="清空已经学习到的识别纠偏规则">清空学习规则</button>
       </div></Panel></section>}
-      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-1440">1440 × 1920</option><option value="portrait-720">720 × 960</option><option value="story-1080">1080 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
+      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-1440">1440 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
       {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><div className="hint-card">自动更新暂未启用；发布源和签名策略确认后再开放。</div></div></Panel></section>}
       {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()} title="选择标题关键词 Excel 文件"><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}

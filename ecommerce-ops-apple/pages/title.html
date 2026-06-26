@@ -1,0 +1,1526 @@
+﻿<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>标题词优化 - 电商运营工具箱</title>
+    <style id="theme-vars">
+/*
+ * Pinguo design tokens
+ * Brand: Pinguo
+ * Domain: Consumer imaging product
+ * Style: Restrained, elegant, Apple-inspired
+ * Theme mode: light-dark
+ * Source language: zh
+ * Output language: en
+ *
+ * Color architecture (two layers):
+ *   1. Primitive palette - six categories. brand / background / text / icon
+ *      are each a 10-step scale (50 lightest to 900 darkest). state-success and
+ *      state-error are functional colors anchored on Apple system colors.
+ *      Anchors follow Apple Human Interface Guidelines system colors
+ *      (System Blue #007AFF, System Green #34C759, System Red #FF3B30,
+ *      system grays / label / background colors).
+ *   2. Semantic tokens - :root (light) and .dark map roles onto primitives.
+ *      Components and UI kits must only consume the semantic tokens below.
+ */
+
+/* @group-priority: brand, background, text, icon, state-success, state-error */
+
+:root {
+  /* ===== PRIMITIVE PALETTE ===== */
+
+  /* brand */
+  --brand-50: #e8f2ff;
+  --brand-100: #cfe5ff;
+  --brand-200: #9fcbff;
+  --brand-300: #66abff;
+  --brand-400: #2e8dff;
+  --brand-500: #007aff; /* @primary */
+  --brand-600: #0064d6;
+  --brand-700: #004fad;
+  --brand-800: #003b82;
+  --brand-900: #00275a;
+
+  /* background */
+  --background-50: #ffffff;
+  --background-100: #f7f7fa;
+  --background-200: #f2f2f7;
+  --background-300: #e5e5ea;
+  --background-400: #d1d1d6;
+  --background-500: #aeaeb2;
+  --background-600: #8e8e93;
+  --background-700: #3a3a3c;
+  --background-800: #1c1c1e;
+  --background-900: #000000;
+
+  /* text */
+  --text-50: #f5f5f7;
+  --text-100: #e3e3e8;
+  --text-200: #c7c7cc;
+  --text-300: #aeaeb2;
+  --text-400: #8e8e93;
+  --text-500: #6e6e73;
+  --text-600: #48484a;
+  --text-700: #3c3c43;
+  --text-800: #1d1d1f;
+  --text-900: #000000;
+
+  /* icon */
+  --icon-50: #f5f5f7;
+  --icon-100: #e5e5ea;
+  --icon-200: #d1d1d6;
+  --icon-300: #c7c7cc;
+  --icon-400: #aeaeb2;
+  --icon-500: #8e8e93;
+  --icon-600: #6e6e73;
+  --icon-700: #48484a;
+  --icon-800: #2c2c2e;
+  --icon-900: #1d1d1f;
+
+  /* state-success */
+  --state-success: #34c759; /* @primary */
+  --state-success-dark: #30d158;
+  --state-success-surface: #e9f9ee;
+  --state-success-foreground: #ffffff;
+
+  /* state-error */
+  --state-error: #ff3b30; /* @primary */
+  --state-error-dark: #ff453a;
+  --state-error-surface: #ffecea;
+  --state-error-foreground: #ffffff;
+
+  /* ===== SEMANTIC ROLES ===== */
+
+  /* semantic */
+  --background: var(--background-50);
+  --foreground: var(--text-800);
+  --card: var(--background-50);
+  --card-foreground: var(--text-800);
+  --popover: var(--background-50);
+  --popover-foreground: var(--text-900);
+
+  --primary: var(--brand-500);
+  --primary-foreground: var(--background-50);
+  --secondary: var(--background-200);
+  --secondary-foreground: var(--text-800);
+  --muted: var(--background-200);
+  --muted-foreground: var(--text-400);
+  --accent: var(--background-100);
+  --accent-foreground: var(--text-800);
+  --destructive: var(--state-error);
+  --destructive-foreground: var(--state-error-foreground);
+  --success: var(--state-success);
+  --success-foreground: var(--state-success-foreground);
+  --border: var(--background-300);
+  --input: var(--background-400);
+  --ring: var(--brand-500);
+
+  --icon: var(--icon-900);
+  --icon-muted: var(--icon-500);
+
+  /* chart */
+  --chart-1: var(--state-success);
+  --chart-2: var(--brand-500);
+  --chart-3: #ff9500;
+  --chart-4: #5856d6;
+  --chart-5: #af52de;
+
+  /* sidebar */
+  --sidebar: var(--background-200);
+  --sidebar-foreground: var(--text-800);
+  --sidebar-primary: var(--brand-500);
+  --sidebar-primary-foreground: var(--background-50);
+  --sidebar-accent: var(--background-300);
+  --sidebar-accent-foreground: var(--text-800);
+  --sidebar-border: var(--background-300);
+  --sidebar-ring: var(--brand-500);
+
+  /* TYPOGRAPHY */
+  --font-sans: DM Sans, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: DM Sans, ui-sans-serif, sans-serif, system-ui;
+  --font-mono: JetBrains Mono, monospace;
+  --tracking-normal: 0em;
+
+  /* RADIUS */
+  --radius: 1.2rem;
+
+  /* SHADOWS */
+  --shadow-2xs: 0 1px 2px -1px rgba(0, 0, 0, 0.04); /* Hairline */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.04); /* Subtle */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05), 0 1px 3px -1px rgba(0, 0, 0, 0.05); /* Card */
+  --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.05); /* Raised */
+  --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.05); /* Card Hover */
+  --shadow-lg: 0 8px 24px -8px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.05); /* Float */
+  --shadow-xl: 0 16px 40px -10px rgba(0, 0, 0, 0.10), 0 8px 16px -8px rgba(0, 0, 0, 0.06); /* Overlay */
+  --shadow-2xl: 0 24px 64px -12px rgba(0, 0, 0, 0.12); /* Modal */
+
+  /* SPACING */
+  --spacing: 0.24rem;
+}
+
+/* ===== SEMANTIC ROLES - dark (primitive palette inherited) ===== */
+.dark {
+  --background: var(--background-900);
+  --foreground: var(--text-50);
+  --card: var(--background-800);
+  --card-foreground: var(--text-50);
+  --popover: var(--background-700);
+  --popover-foreground: var(--text-50);
+
+  --primary: var(--brand-400);
+  --primary-foreground: var(--background-900);
+  --secondary: var(--background-800);
+  --secondary-foreground: var(--text-50);
+  --muted: var(--background-800);
+  --muted-foreground: var(--text-400);
+  --accent: var(--background-700);
+  --accent-foreground: var(--text-50);
+  --destructive: var(--state-error-dark);
+  --destructive-foreground: var(--state-error-foreground);
+  --success: var(--state-success-dark);
+  --success-foreground: var(--state-success-foreground);
+  --border: var(--background-700);
+  --input: var(--background-700);
+  --ring: var(--brand-400);
+
+  --icon: var(--icon-50);
+  --icon-muted: var(--icon-500);
+
+  --chart-1: var(--state-success-dark);
+  --chart-2: var(--brand-400);
+  --chart-3: #ff9f0a;
+  --chart-4: #5e5ce6;
+  --chart-5: #bf5af2;
+
+  --sidebar: var(--background-800);
+  --sidebar-foreground: var(--text-50);
+  --sidebar-primary: var(--brand-400);
+  --sidebar-primary-foreground: var(--background-900);
+  --sidebar-accent: var(--background-700);
+  --sidebar-accent-foreground: var(--text-50);
+  --sidebar-border: var(--background-700);
+  --sidebar-ring: var(--brand-400);
+
+  --shadow-2xs: 0 1px 2px -1px rgba(0, 0, 0, 0.30);
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.30);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.36), 0 1px 3px -1px rgba(0, 0, 0, 0.36);
+  --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.40), 0 1px 2px -1px rgba(0, 0, 0, 0.36);
+  --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.44), 0 2px 4px -2px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 8px 24px -8px rgba(0, 0, 0, 0.50), 0 4px 8px -4px rgba(0, 0, 0, 0.40);
+  --shadow-xl: 0 16px 40px -10px rgba(0, 0, 0, 0.55), 0 8px 16px -8px rgba(0, 0, 0, 0.44);
+  --shadow-2xl: 0 24px 64px -12px rgba(0, 0, 0, 0.60);
+}
+
+    </style>
+    <style id="component-vars">
+/*
+ * components.css - aggregated component CSS
+ * Auto-extracted from preview/component-*.html files.
+ * DO NOT EDIT. Regenerate with extract-components-css.mjs.
+ *
+ * Foundation tokens live in colors_and_type.css.
+ * This file consumes those tokens via var(--*) references.
+ */
+
+/* ============================================================
+ * Button
+ * source: preview/component-button.html
+ * rules: 10
+ */
+/* @anatomy
+   <div class="row"><span class="label">Primary 56</span><button class="btn btn-primary btn-lg">Buy now</button><button class="btn btn-primary btn-lg" disabled>Buy now</button></div>
+*/
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:calc(var(--spacing)*1.5);height:40px;padding:0 20px;border:none;border-radius:calc(var(--radius)*2);background:transparent;color:var(--foreground);font:600 14px/1 var(--font-sans);letter-spacing:var(--tracking-normal);white-space:nowrap;box-shadow:var(--shadow-sm);cursor:pointer;transition:background-color .18s ease,color .18s ease,opacity .18s ease,filter .18s ease}
+.btn:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.btn:disabled{opacity:.42;cursor:not-allowed}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{filter:brightness(.96)}
+.btn-secondary{height:48px;padding:0 24px;background:var(--secondary);color:var(--secondary-foreground)}
+.btn-secondary:hover{background:var(--muted)}
+.btn-text{height:48px;padding:0 4px;box-shadow:none}
+.btn-text:hover{color:var(--primary)}
+.btn-lg{height:56px;padding:0 28px;font-size:16px}
+
+/* ============================================================
+ * Card
+ * source: preview/component-card.html
+ * rules: 12
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">Info</span>
+   <article class="card">
+   <div><div class="eyebrow">Pinguo Apple</div>
+*/
+.card{width:188px;min-height:148px;padding:calc(var(--spacing)*5);display:flex;flex-direction:column;justify-content:space-between;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-md);transition:transform .18s ease,box-shadow .18s ease}
+.card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.card.disabled,.card.disabled:hover{opacity:.5;transform:none;box-shadow:var(--shadow-md)}
+.eyebrow,.meta{color:var(--muted-foreground);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.title{margin:6px 0 8px;font-size:18px;line-height:1.15}
+.body-copy{margin:0;color:var(--muted-foreground);font-size:13px}
+.cta{display:inline-flex;align-items:center;justify-content:center;width:max-content;margin-top:12px;padding:calc(var(--spacing)*2) calc(var(--spacing)*3.5);border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:12px;font-weight:700;text-decoration:none}
+.media{aspect-ratio:4/3;border-radius:calc(var(--radius) - 4px);background:linear-gradient(135deg,var(--secondary),var(--accent));border:1px solid var(--border)}
+.media-card{min-height:212px;padding:calc(var(--spacing)*4)}
+.media-card .title{font-size:16px;margin:10px 0 6px}
+.price{font-size:12px;color:var(--muted-foreground)}
+.dark{background:var(--card);color:var(--card-foreground)}
+
+/* ============================================================
+ * Comparison Table
+ * source: preview/component-comparison-table.html
+ * rules: 13
+ */
+/* @anatomy
+   <div class="row"><span class="label">Default</span><div class="t"><div class="c m">Compare models</div>
+*/
+.t{display:grid;grid-template-columns:96px repeat(3,1fr);overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--card-foreground);box-shadow:var(--shadow-sm)}
+.q{grid-template-columns:82px repeat(4,1fr)}
+.c{padding:10px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
+.t>.c:nth-child(4n),.q>.c:nth-child(5n){border-right:0}
+.t>.c:nth-last-child(-n+4),.q>.c:nth-last-child(-n+5){border-bottom:0}
+.m{background:var(--background);color:var(--muted-foreground);font:700 10px/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase}
+.h{background:var(--background);font-weight:700}
+.k{display:block;font-size:14px;line-height:1.1}
+.s{display:block;margin-top:4px;color:var(--chart-2);font-size:11px;font-weight:700}
+.b .k{color:var(--chart-2)}
+.v{font-weight:600}
+.n{color:var(--muted-foreground);font-size:12px}
+.x{opacity:.45}
+
+/* ============================================================
+ * Input
+ * source: preview/component-input.html
+ * rules: 10
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">Search 44</span>
+   <div class="field">
+   <span class="icon">⌕</span>
+   <input class="control" aria-label="Search products" placeholder="Search products">
+   <button class="clear" type="button" aria-label="Clear search">×</button>
+   </div>
+*/
+.surface{display:flex;gap:calc(var(--spacing)*2);padding:calc(var(--spacing)*3);border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow-sm)}
+.dark{background:var(--background);color:var(--foreground)}
+.field{display:flex;align-items:center;gap:calc(var(--spacing)*2);min-width:240px;height:44px;padding:0 calc(var(--spacing)*3);border:1px solid var(--input);border-radius:var(--radius);background:var(--background);color:var(--foreground);box-shadow:var(--shadow-xs)}
+.field.small{height:40px}
+.field:focus-within{border-color:var(--ring);box-shadow:0 0 0 1px var(--ring)}
+.field.disabled{opacity:.55}
+.icon,.clear{padding:0;border:0;background:transparent;color:var(--icon-muted);font:inherit}
+.icon{font-size:13px}
+.control{flex:1;border:0;outline:0;background:transparent;color:inherit;font:inherit}
+.control::placeholder{color:var(--muted-foreground)}
+
+/* ============================================================
+ * Navigation
+ * source: preview/component-navigation.html
+ * rules: 16
+ */
+/* @anatomy
+   <div class="row"><span class="label">Global 44</span><nav class="webbar dark" aria-label="Pinguo Apple global navigation"><span class="brand">Pinguo Apple</span><div class="rail"><a class="link" href="#">Store</a><a class="link" href="#">Explore</a><a class="link" href="#">Community</a><a class="link" href="#">Support</a></div>
+*/
+.webbar,.mobile{border:1px solid var(--border);box-shadow:var(--shadow-sm)}
+.webbar{display:flex;align-items:center;gap:calc(var(--spacing)*2);min-width:320px;height:44px;padding:0 calc(var(--spacing)*3);border-radius:var(--radius);background:var(--sidebar)}
+.brand{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.link,.tab{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;color:inherit;text-decoration:none;white-space:nowrap;transition:background-color .18s ease,color .18s ease,opacity .18s ease}
+.link{height:32px;padding:0 calc(var(--spacing)*2.5)}
+.link:hover,.tab:hover{background:var(--secondary)}
+.link:focus-visible,.tab:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.dark{background:var(--sidebar);color:var(--foreground)}
+.disabled{opacity:.48}
+.disabled .link,.disabled .tab{pointer-events:none}
+.mobile{padding:calc(var(--spacing)*2);border-radius:calc(var(--radius)*1.1);background:var(--card)}
+.screen{display:flex;align-items:flex-end;justify-content:center;width:188px;height:164px;padding:calc(var(--spacing)*3);border-radius:calc(var(--radius)*.9);background:linear-gradient(180deg,var(--background),var(--secondary))}
+.tabbar{display:flex;gap:calc(var(--spacing)*1.5);padding:calc(var(--spacing)*1.5);border:1px solid var(--border);border-radius:999px;background:var(--card);box-shadow:var(--shadow-md)}
+.tab{flex-direction:column;gap:2px;min-width:56px;height:56px;padding:0 calc(var(--spacing)*1.5);font-size:11px;text-align:center}
+.dot{width:18px;height:18px;border-radius:999px;background:var(--secondary);box-shadow:inset 0 0 0 1px var(--border)}
+.tab:hover .dot{background:var(--primary)}
+
+/* ============================================================
+ * Product Grid
+ * source: preview/component-product-grid.html
+ * rules: 12
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">4-up</span>
+   <div class="grid grid-4">
+   <article class="card"><div class="media"></div>
+*/
+.grid{display:grid;gap:8px;flex:1}
+.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--card-foreground);box-shadow:var(--shadow-xs);transition:border-color .2s ease,transform .2s ease}
+.card:hover{border-color:var(--primary);transform:translateY(-1px)}
+.media{aspect-ratio:1;border-radius:calc(var(--radius) - 4px);background:linear-gradient(135deg,var(--secondary),var(--background));border:1px solid var(--border)}
+.eyebrow{color:var(--muted-foreground);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+.title{font-size:15px;line-height:1.25}
+.price{font-variant-numeric:tabular-nums}
+.cta{display:inline-flex;align-self:flex-start;padding:7px 10px;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:12px;text-decoration:none}
+.muted{color:var(--muted-foreground)}
+.is-disabled{opacity:.55}
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-foreground: var(--card-foreground);
+  }
+  @layer base {
+    body { background: var(--card-background); color: var(--card-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+
+<div class="app-shell">
+
+    <!-- ===== SIDEBAR ===== -->
+    <aside class="app-sidebar" role="navigation" aria-label="Main navigation">
+
+        <!-- Logo -->
+        <div class="sidebar-logo">
+            <div class="sidebar-logo-icon">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M13 2L4.09 12.64C3.74 13.04 3.56 13.24 3.56 13.48C3.56 13.68 3.68 13.84 3.92 14.16L13 26H20L10.62 13.48L20 2H13Z" fill="white"/>
+                </svg>
+            </div>
+            <span class="sidebar-logo-text">电商运营工具箱</span>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="sidebar-nav">
+            <button class="nav-item" data-dom-id="nav-home" data-nav-key="dashboard">
+                <i class="nav-icon" style="-webkit-mask-image: url('../assets/icons/house.svg'); mask-image: url('../assets/icons/house.svg');"></i>
+                <span class="nav-label">工具首页</span>
+            </button>
+            <button class="nav-item" data-dom-id="nav-rebate" data-nav-key="rebate">
+                <i class="nav-icon" style="-webkit-mask-image: url('../assets/icons/box.svg'); mask-image: url('../assets/icons/box.svg');"></i>
+                <span class="nav-label">支付宝返款</span>
+            </button>
+            <button class="nav-item" data-dom-id="nav-video" data-nav-key="video">
+                <i class="nav-icon" style="-webkit-mask-image: url('../assets/icons/circle-play.svg'); mask-image: url('../assets/icons/circle-play.svg');"></i>
+                <span class="nav-label">视频批量剪辑</span>
+            </button>
+            <button class="nav-item" data-dom-id="nav-review" data-nav-key="review">
+                <i class="nav-icon" style="-webkit-mask-image: url('../assets/icons/message-circle-more.svg'); mask-image: url('../assets/icons/message-circle-more.svg');"></i>
+                <span class="nav-label">收评助手</span>
+            </button>
+            <button class="nav-item" data-active="true" data-dom-id="nav-title" data-nav-key="title">
+                <i class="nav-icon" style="-webkit-mask-image: url('../assets/icons/tag.svg'); mask-image: url('../assets/icons/tag.svg');"></i>
+                <span class="nav-label">标题词优化</span>
+            </button>
+            <button class="nav-item" data-dom-id="nav-compare" data-nav-key="compare">
+                <i class="nav-icon" style="-webkit-mask-image: url('../assets/icons/chevrons-down-up.svg'); mask-image: url('../assets/icons/chevrons-down-up.svg');"></i>
+                <span class="nav-label">评价返款对比</span>
+            </button>
+        </nav>
+
+        <!-- Footer: Settings -->
+        <div class="sidebar-footer">
+            <button class="nav-item" data-dom-id="nav-settings">
+                <i class="nav-icon" style="-webkit-mask-image: url('../assets/icons/grip.svg'); mask-image: url('../assets/icons/grip.svg');"></i>
+                <span class="nav-label">设置</span>
+            </button>
+        </div>
+
+    </aside>
+
+    <!-- ===== MAIN AREA ===== -->
+    <div class="app-main">
+
+        <!-- Topbar -->
+        <header class="app-topbar">
+            <div class="topbar-left">
+                <span class="topbar-title" data-dom-id="topbar-title">标题词优化</span>
+            </div>
+            <div class="topbar-right">
+                <div class="topbar-status">
+                    <span class="status-dot"></span>
+                    <span>系统正常</span>
+                </div>
+                <div class="topbar-divider"></div>
+                <button class="topbar-action" aria-label="Notifications" data-dom-id="topbar-notifications">
+                    <i class="nav-icon" style="width:16px;height:16px;-webkit-mask-image: url('../assets/icons/mail.svg'); mask-image: url('../assets/icons/mail.svg');"></i>
+                </button>
+                <button class="topbar-action" aria-label="User menu" data-dom-id="topbar-user">
+                    <i class="nav-icon" style="width:16px;height:16px;-webkit-mask-image: url('../assets/icons/user.svg'); mask-image: url('../assets/icons/user.svg');"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Content -->
+        <div class="app-content" data-dom-id="page-content-root">
+
+            <!-- ===== TITLE OPTIMIZER PAGE ===== -->
+            <div class="title-page">
+
+                <!-- TOP SECTION: Input & Analysis -->
+                <section class="title-top">
+
+                    <!-- Input Area -->
+                    <div class="title-input-area">
+                        <div class="field">
+                            <input class="control" type="text" placeholder="粘贴商品标题..." value="夏季新款飞织透气运动鞋男减震跑步鞋轻便休闲鞋2024新款">
+                        </div>
+
+                        <div class="input-actions">
+                            <button class="btn-analyze">
+                                <i style="-webkit-mask-image: url('../assets/icons/funnel.svg'); mask-image: url('../assets/icons/funnel.svg');"></i>
+                                分析
+                            </button>
+                        </div>
+
+                        <!-- Keyword Analysis Chips -->
+                        <div class="title-chips">
+                            <div class="chip-group chip-green">
+                                高转化词
+                                <span class="chip-keyword">运动鞋</span>
+                                <span class="chip-keyword">透气</span>
+                                <span class="chip-keyword">跑步鞋</span>
+                            </div>
+                            <div class="chip-group chip-blue">
+                                核心关键词
+                                <span class="chip-keyword">飞织</span>
+                                <span class="chip-keyword">夏季新款</span>
+                            </div>
+                            <div class="chip-group chip-orange">
+                                可优化词
+                                <span class="chip-keyword">轻便</span>
+                                <span class="chip-keyword">休闲鞋</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Score Ring Display -->
+                    <div class="title-score-section">
+                        <div class="score-ring">
+                            <svg viewBox="0 0 120 120">
+                                <circle class="score-ring-bg" cx="60" cy="60" r="52" />
+                                <circle class="score-ring-fill" cx="60" cy="60" r="52" />
+                            </svg>
+                            <span class="score-number">78</span>
+                        </div>
+                        <span class="score-label">综合评分</span>
+                    </div>
+
+                </section>
+
+                <!-- BOTTOM SECTION: Results & Suggestions + Side Panel -->
+                <div class="title-bottom">
+
+                    <!-- Main Results -->
+                    <div class="title-results">
+
+                        <!-- Original Title Card -->
+                        <div class="result-card">
+                            <div class="result-card-header">
+                                <span class="result-card-label">原始标题</span>
+                                <span class="result-card-score">
+                                    <span class="score-indicator warning"></span>
+                                    评分 78
+                                </span>
+                            </div>
+                            <div class="result-card-title">
+                                夏季新款<span class="kw-blue">飞织</span><span class="kw-green">透气</span><span class="kw-green">运动鞋</span>男<span class="kw-orange">减震</span><span class="kw-green">跑步鞋</span><span class="kw-orange">轻便</span><span class="kw-orange">休闲鞋</span>2024新款
+                            </div>
+                            <div class="result-card-footer">
+                                <span class="result-card-bytes">字节数: 52/60</span>
+                            </div>
+                        </div>
+
+                        <!-- Optimized Suggestion 1 -->
+                        <div class="result-card">
+                            <div class="result-card-header">
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <span class="result-card-label">优化方案 A</span>
+                                    <span class="variant-badge">BEST</span>
+                                </div>
+                                <span class="result-card-score">
+                                    <span class="score-indicator"></span>
+                                    评分 92
+                                </span>
+                            </div>
+                            <div class="result-card-title">
+                                2024夏季新款<span class="kw-blue">飞织</span><span class="kw-green">透气</span><span class="kw-green">运动鞋</span>男<span class="kw-green">跑步鞋</span>减震缓震透气网面轻便慢跑鞋
+                            </div>
+                            <div class="result-card-footer">
+                                <span class="result-card-bytes">字节数: 54/60</span>
+                                <button class="btn-use">
+                                    <i style="-webkit-mask-image: url('../assets/icons/check.svg'); mask-image: url('../assets/icons/check.svg');"></i>
+                                    使用
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Optimized Suggestion 2 -->
+                        <div class="result-card">
+                            <div class="result-card-header">
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <span class="result-card-label">优化方案 B</span>
+                                </div>
+                                <span class="result-card-score">
+                                    <span class="score-indicator"></span>
+                                    评分 88
+                                </span>
+                            </div>
+                            <div class="result-card-title">
+                                <span class="kw-blue">飞织</span><span class="kw-green">透气</span><span class="kw-green">运动鞋</span>男2024夏季新款减震<span class="kw-green">跑步鞋</span>网面透气轻便跑鞋
+                            </div>
+                            <div class="result-card-footer">
+                                <span class="result-card-bytes">字节数: 52/60</span>
+                                <button class="btn-use">
+                                    <i style="-webkit-mask-image: url('../assets/icons/check.svg'); mask-image: url('../assets/icons/check.svg');"></i>
+                                    使用
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Optimized Suggestion 3 -->
+                        <div class="result-card">
+                            <div class="result-card-header">
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <span class="result-card-label">优化方案 C</span>
+                                </div>
+                                <span class="result-card-score">
+                                    <span class="score-indicator warning"></span>
+                                    评分 85
+                                </span>
+                            </div>
+                            <div class="result-card-title">
+                                夏季新款男<span class="kw-green">运动鞋</span><span class="kw-blue">飞织</span><span class="kw-green">透气</span>减震<span class="kw-green">跑步鞋</span>2024新款轻便防滑休闲跑鞋
+                            </div>
+                            <div class="result-card-footer">
+                                <span class="result-card-bytes">字节数: 52/60</span>
+                                <button class="btn-use">
+                                    <i style="-webkit-mask-image: url('../assets/icons/check.svg'); mask-image: url('../assets/icons/check.svg');"></i>
+                                    使用
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Side Panel -->
+                    <div class="title-side-panel">
+
+                        <!-- Word Frequency Analysis -->
+                        <div class="side-panel-section">
+                            <div class="side-panel-title">
+                                <i style="-webkit-mask-image: url('../assets/icons/funnel.svg'); mask-image: url('../assets/icons/funnel.svg');"></i>
+                                词频分析
+                            </div>
+                            <div class="bar-chart">
+                                <div class="bar-item">
+                                    <div class="bar-item-header">
+                                        <span class="bar-item-label">运动鞋</span>
+                                        <span class="bar-item-value">89%</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill blue" style="width: 89%;"></div>
+                                    </div>
+                                </div>
+                                <div class="bar-item">
+                                    <div class="bar-item-header">
+                                        <span class="bar-item-label">透气</span>
+                                        <span class="bar-item-value">76%</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill blue" style="width: 76%;"></div>
+                                    </div>
+                                </div>
+                                <div class="bar-item">
+                                    <div class="bar-item-header">
+                                        <span class="bar-item-label">飞织</span>
+                                        <span class="bar-item-value">58%</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill blue" style="width: 58%;"></div>
+                                    </div>
+                                </div>
+                                <div class="bar-item">
+                                    <div class="bar-item-header">
+                                        <span class="bar-item-label">减震</span>
+                                        <span class="bar-item-value">34%</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill orange" style="width: 34%;"></div>
+                                    </div>
+                                </div>
+                                <div class="bar-item">
+                                    <div class="bar-item-header">
+                                        <span class="bar-item-label">跑步鞋</span>
+                                        <span class="bar-item-value">71%</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill blue" style="width: 71%;"></div>
+                                    </div>
+                                </div>
+                                <div class="bar-item">
+                                    <div class="bar-item-header">
+                                        <span class="bar-item-label">轻便</span>
+                                        <span class="bar-item-value">22%</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill orange" style="width: 22%;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Suggested Replacements -->
+                        <div class="side-panel-section">
+                            <div class="side-panel-title">
+                                <i style="-webkit-mask-image: url('../assets/icons/pen-line.svg'); mask-image: url('../assets/icons/pen-line.svg');"></i>
+                                建议替换
+                            </div>
+                            <div class="suggest-list">
+                                <div class="suggest-item">
+                                    <span class="suggest-before">轻便</span>
+                                    <i class="suggest-arrow"></i>
+                                    <span class="suggest-after">缓震</span>
+                                </div>
+                                <div class="suggest-item">
+                                    <span class="suggest-before">休闲鞋</span>
+                                    <i class="suggest-arrow"></i>
+                                    <span class="suggest-after">慢跑鞋</span>
+                                </div>
+                                <div class="suggest-item">
+                                    <span class="suggest-before">减震</span>
+                                    <i class="suggest-arrow"></i>
+                                    <span class="suggest-after">减震缓震</span>
+                                </div>
+                                <div class="suggest-item">
+                                    <span class="suggest-before">2024新款</span>
+                                    <i class="suggest-arrow"></i>
+                                    <span class="suggest-after">新品首发</span>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+    <style id="shell-styles">
+/* ===== APP SHELL LAYOUT ===== */
+
+/* Reset */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--background);
+  color: var(--foreground);
+  min-height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* App root layout */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* ===== SIDEBAR ===== */
+.app-sidebar {
+  position: relative;
+  width: 248px;
+  min-width: 248px;
+  height: 100vh;
+  background: var(--background-900);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 100;
+  overflow: hidden;
+}
+
+/* Sidebar logo area */
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px 24px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-logo-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--brand-500), var(--brand-400));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-logo-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: var(--background-50);
+}
+
+.sidebar-logo-text {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-100);
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+/* Sidebar navigation */
+.sidebar-nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.sidebar-nav {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Nav item */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-400);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  border: none;
+  background: transparent;
+  border-left: 3px solid transparent;
+  width: calc(100% - 0px);
+  text-align: left;
+  outline: none;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-100);
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* Active nav item */
+.nav-item[data-active="true"] {
+  background: rgba(0, 102, 204, 0.1);
+  color: var(--brand-500);
+  border-left-color: var(--brand-500);
+}
+
+/* Nav icon (CSS mask) */
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  background-color: currentColor;
+}
+
+/* Nav label */
+.nav-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sidebar footer */
+.sidebar-footer {
+  padding: 12px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ===== MAIN AREA ===== */
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ===== TOPBAR ===== */
+.app-topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  min-height: 48px;
+  padding: 0 24px;
+  background: rgba(28, 28, 30, 0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 90;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.topbar-title {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-100);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-400);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--state-success);
+}
+
+.topbar-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.topbar-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-400);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.topbar-action:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-100);
+}
+
+.topbar-action:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+}
+
+/* ===== CONTENT AREA ===== */
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--background);
+}
+
+.app-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.app-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.app-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* Utility: no-scrollbar */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Utility: data-icon (CSS mask for inline icons) */
+[data-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  background-color: currentColor;
+}
+    </style>
+    <style id="page-title-styles">
+/* ===== TITLE OPTIMIZER PAGE ===== */
+
+.title-page {
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  gap: 20px;
+  height: 100%;
+}
+
+/* Top section: input + score ring + chips */
+.title-top {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+/* Input area */
+.title-input-area {
+  flex: 1;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.title-input-area .field {
+  width: 100%;
+  min-width: 0;
+  height: 56px;
+  border-radius: 8px;
+  background: var(--background-800);
+  padding: 0 18px;
+  font-size: 15px;
+}
+
+.title-input-area .field .control {
+  font-size: 15px;
+}
+
+.title-input-area .field .control::placeholder {
+  color: var(--text-500);
+}
+
+.title-input-area .input-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Analyze button */
+.btn-analyze {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 24px;
+  border-radius: 999px;
+  border: none;
+  background: var(--brand-600);
+  color: var(--background-50);
+  font: 600 13px/1 var(--font-sans);
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.btn-analyze:hover {
+  filter: brightness(1.08);
+}
+
+.btn-analyze:active {
+  filter: brightness(0.96);
+}
+
+.btn-analyze i {
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* Score ring section */
+.title-score-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.score-ring {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+.score-ring svg {
+  width: 120px;
+  height: 120px;
+  transform: rotate(-90deg);
+}
+
+.score-ring-bg {
+  fill: none;
+  stroke: var(--background-700);
+  stroke-width: 8;
+}
+
+.score-ring-fill {
+  fill: none;
+  stroke: var(--brand-600);
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-dasharray: 326.73;
+  stroke-dashoffset: 71.87;
+  transition: stroke-dashoffset 0.6s ease;
+}
+
+.score-number {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--background-50);
+  font-family: var(--font-sans);
+  line-height: 1;
+}
+
+.score-label {
+  font-size: 12px;
+  color: var(--text-400);
+  font-weight: 500;
+  font-family: var(--font-sans);
+}
+
+/* Keyword analysis chips */
+.title-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+}
+
+.chip-green {
+  background: rgba(52, 199, 89, 0.15);
+  color: var(--state-success-dark);
+}
+
+.chip-blue {
+  background: rgba(0, 102, 204, 0.15);
+  color: var(--brand-400);
+}
+
+.chip-orange {
+  background: rgba(255, 149, 0, 0.15);
+  color: var(--chart-3);
+}
+
+.chip-keyword {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+  font-size: 11px;
+}
+
+.chip-green .chip-keyword {
+  background: rgba(52, 199, 89, 0.2);
+}
+
+.chip-blue .chip-keyword {
+  background: rgba(0, 102, 204, 0.2);
+}
+
+.chip-orange .chip-keyword {
+  background: rgba(255, 149, 0, 0.2);
+}
+
+/* Bottom section: results + side panel */
+.title-bottom {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Main results area */
+.title-results {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Result cards */
+.result-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: var(--background-800);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.result-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.result-card-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-400);
+  font-family: var(--font-sans);
+}
+
+.result-card-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+}
+
+.result-card-score .score-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--state-success);
+}
+
+.result-card-score .score-indicator.warning {
+  background: var(--chart-3);
+}
+
+.result-card-title {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-100);
+  font-family: var(--font-sans);
+  word-break: break-all;
+}
+
+.result-card-title .kw-green {
+  color: var(--state-success-dark);
+  font-weight: 600;
+}
+
+.result-card-title .kw-blue {
+  color: var(--brand-400);
+  font-weight: 600;
+}
+
+.result-card-title .kw-orange {
+  color: var(--chart-3);
+  font-weight: 600;
+  text-decoration: wavy underline;
+  text-underline-offset: 3px;
+}
+
+.result-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.result-card-bytes {
+  font-size: 11px;
+  color: var(--text-500);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.btn-use {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: none;
+  background: var(--brand-600);
+  color: var(--background-50);
+  font: 600 12px/1 var(--font-sans);
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.btn-use:hover {
+  filter: brightness(1.08);
+}
+
+.btn-use i {
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* Side panel */
+.title-side-panel {
+  width: 280px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+.side-panel-section {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--background-800);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.side-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-100);
+  font-family: var(--font-sans);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.side-panel-title i {
+  width: 16px;
+  height: 16px;
+  background-color: var(--text-400);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* CSS-only bar chart */
+.bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bar-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bar-item-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-200);
+  font-family: var(--font-sans);
+}
+
+.bar-item-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-400);
+  font-family: var(--font-mono);
+}
+
+.bar-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-700);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.bar-fill.blue {
+  background: var(--brand-600);
+}
+
+.bar-fill.orange {
+  background: var(--chart-3);
+}
+
+/* Suggestion replacements */
+.suggest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--background-700);
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+
+.suggest-before {
+  color: var(--text-400);
+  text-decoration: line-through;
+  font-weight: 500;
+}
+
+.suggest-arrow {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background-color: var(--text-400);
+  -webkit-mask-image: url('../assets/icons/arrow-right.svg');
+  mask-image: url('../assets/icons/arrow-right.svg');
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+.suggest-after {
+  color: var(--state-success-dark);
+  font-weight: 600;
+}
+
+/* Variant badge */
+.variant-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0, 102, 204, 0.12);
+  color: var(--brand-400);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+    </style>
+</body>
+</html>

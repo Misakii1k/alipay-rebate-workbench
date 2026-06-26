@@ -883,7 +883,18 @@ export function ReviewAssistant({
               onThumbSizeChange={setThumbSize}
             />
 
-            {results.length === 0 && !searching && <ReviewEmptyState query={query} />}
+            {results.length === 0 && !searching && (
+              <div className="empty-state">
+                <div className="empty-state-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M8 12h8" />
+                  </svg>
+                </div>
+                <div className="empty-state-title">等待识别</div>
+                <div className="empty-state-desc">粘贴买家评价或上传截图后,将在此显示识别结果</div>
+              </div>
+            )}
 
             <ReviewResultGrid
               items={visibleResults}
@@ -1225,7 +1236,7 @@ interface ReviewResultGridProps {
 function ReviewResultGrid({ items, selectedKeys, expandedFolders, loadingFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onLoadMoreFolderChildren, onPreview, dragPathsFor, thumbnailMap, thumbSize = "medium" }: ReviewResultGridProps) {
   return (
     <div className="review-v2-grid" data-thumb-size={thumbSize}>
-      {items.map((item) => {
+      {items.map((item, index) => {
         const isFolder = item.kind === "folder";
         const isSelected = selectedKeys.has(item.path);
         const isExpanded = isFolder && expandedFolders.has(item.path);
@@ -1237,7 +1248,7 @@ function ReviewResultGrid({ items, selectedKeys, expandedFolders, loadingFolders
         const thumbDataUrl = item.thumbnailDataUrl ?? thumbnailMap[item.path] ?? folderCover;
         return (
           <Fragment key={item.path}>
-            <button className={clsx("review-v2-card", isFolder && "is-folder", isSelected && "selected")} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
+            <button className={clsx("review-v2-card list-item", isFolder && "is-folder", isSelected && "selected")} style={{ "--i": index } as React.CSSProperties} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (window.alipayWorkbench.startDragFiles) { event.preventDefault(); void window.alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
               <div className="review-v2-thumb">
                 {thumbDataUrl ? <img src={thumbDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
                 {isFolder && folderChildCount > 0 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {folderChildCount}</span>}

@@ -1,0 +1,80 @@
+{
+  "root": {
+    "nodeId": "gen-project-shell",
+    "kind": "project-shell",
+    "pageIds": [],
+    "output": "partials/project-shell.html",
+    "sharedRegions": ["sidebar", "topbar", "root-frame", "brand-css-usage", "type-scale", "radius-scale"],
+    "privateRegions": [],
+    "mutableSlots": ["activeNavItem"],
+    "status": "planned",
+    "children": [
+      {
+        "nodeId": "gen-page-dashboard",
+        "kind": "page-leaf",
+        "pageIds": ["page-dashboard"],
+        "output": "pages/dashboard.html",
+        "sharedRegions": [],
+        "privateRegions": ["hero-section", "bento-cards", "metrics"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-page-rebate",
+        "kind": "page-leaf",
+        "pageIds": ["page-rebate"],
+        "output": "pages/rebate.html",
+        "sharedRegions": [],
+        "privateRegions": ["rebate-workspace", "table", "actions"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-page-video",
+        "kind": "page-leaf",
+        "pageIds": ["page-video"],
+        "output": "pages/video.html",
+        "sharedRegions": [],
+        "privateRegions": ["video-workspace", "template-list", "preview-area"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-page-review",
+        "kind": "page-leaf",
+        "pageIds": ["page-review"],
+        "output": "pages/review.html",
+        "sharedRegions": [],
+        "privateRegions": ["chat-interface", "search-panel", "image-grid"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-page-title",
+        "kind": "page-leaf",
+        "pageIds": ["page-title"],
+        "output": "pages/title.html",
+        "sharedRegions": [],
+        "privateRegions": ["title-analyzer", "score-display", "keyword-chips"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      },
+      {
+        "nodeId": "gen-page-settings",
+        "kind": "page-leaf",
+        "pageIds": ["page-settings"],
+        "output": "pages/settings.html",
+        "sharedRegions": [],
+        "privateRegions": ["settings-hub", "toggle-switches", "api-config"],
+        "mutableSlots": [],
+        "status": "planned",
+        "children": []
+      }
+    ]
+  }
+}

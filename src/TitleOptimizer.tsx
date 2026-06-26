@@ -317,7 +317,7 @@ export function TitleOptimizer({
         />
       )}
 
-      {generated && generated.candidates.length > 0 && (
+      {generated && generated.candidates.length > 0 ? (
         <section className="title-v2-candidates">
           <div className="title-v2-section-head">
             <Sparkles size={16} />
@@ -325,16 +325,27 @@ export function TitleOptimizer({
             <span>{generated.candidates.length} 个</span>
           </div>
           <div className="title-v2-candidate-grid">
-            {generated.candidates.map((candidate) => (
+            {generated.candidates.map((candidate, index) => (
               <TitleCandidateCardV2
                 key={candidate.id}
                 candidate={candidate}
+                index={index}
                 onCopy={() => void copyText(candidate.title, "标题已复制。")}
                 onCompare={analysis ? () => setCompareCandidate(candidate) : undefined}
               />
             ))}
           </div>
         </section>
+      ) : !generating && (
+        <div className="empty-state">
+          <div className="empty-state-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M12 2L9 9H2l5.5 4.5L5 21l7-4.5 7 4.5-2.5-7.5L22 9h-7z" />
+            </svg>
+          </div>
+          <div className="empty-state-title">暂无候选</div>
+          <div className="empty-state-desc">输入商品关键词后,将在此显示优化后的标题候选</div>
+        </div>
       )}
 
       <TitleAIDrawer
@@ -645,11 +656,13 @@ function DimRing({ label, value, color, icon }: { label: string; value: number; 
 function TitleCandidateCardV2({
   candidate,
   onCopy,
-  onCompare
+  onCompare,
+  index
 }: {
   candidate: TitleCandidate;
   onCopy: () => void;
   onCompare?: () => void;
+  index?: number;
 }) {
   const [rulesOpen, setRulesOpen] = useState(false);
   const failedRequired = candidate.ruleChecks.filter((rule) => rule.required && !rule.passed);
@@ -657,7 +670,7 @@ function TitleCandidateCardV2({
   const scoreColor = displayScore >= 80 ? "var(--green)" : displayScore >= 60 ? "var(--gold)" : "var(--red)";
 
   return (
-    <article className={clsx("title-v2-candidate", failedRequired.length > 0 && "warned")} data-mode={candidate.mode}>
+    <article className={clsx("title-v2-candidate", index !== undefined && "list-item", failedRequired.length > 0 && "warned")} data-mode={candidate.mode} style={index !== undefined ? { "--i": index } as CSSProperties : undefined}>
       <div className="title-v2-candidate-head">
         <span className="title-v2-mode-chip" data-mode={candidate.mode}>{candidate.label}</span>
         <div className="title-v2-candidate-score" style={{ "--score": displayScore, "--color": scoreColor } as CSSProperties}>

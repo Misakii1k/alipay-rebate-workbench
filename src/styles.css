@@ -2284,6 +2284,18 @@ textarea:focus, input:focus, select:focus {
   background: rgba(0, 0, 0, 0.22);
 }
 
+/* === UI Polish: Global focus-visible fallback === */
+button:focus-visible,
+.nav-item:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.toggle:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
 .import-summary, .result-box {
   margin-top: 10px;
   margin-bottom: 6px;
@@ -2579,6 +2591,72 @@ textarea:focus, input:focus, select:focus {
       0 0 0 22px rgba(155, 77, 47, 0),
       0 0 32px 12px rgba(155, 77, 47, 0);
     opacity: 0;
+  }
+}
+
+/* === 录入界面识别成功扩散动画 === */
+.entry-layout {
+  position: relative;
+  overflow: hidden;
+}
+
+.entry-burst-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+}
+
+.entry-burst-ripple {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--green);
+  opacity: 0;
+  animation: entryBurstRipple 1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.entry-burst-ripple-2 {
+  animation-delay: 150ms;
+  border-color: var(--green);
+  opacity: 0;
+}
+
+@keyframes entryBurstRipple {
+  0% {
+    width: 24px;
+    height: 24px;
+    opacity: 0.8;
+    border-width: 3px;
+  }
+  100% {
+    width: 480px;
+    height: 480px;
+    opacity: 0;
+    border-width: 1px;
+  }
+}
+
+/* Apple 主题下用蓝色 */
+html[data-ui-design="apple"] .entry-burst-ripple,
+html[data-ui-design="apple"] .entry-burst-ripple-2 {
+  border-color: var(--blue);
+}
+
+/* 浅色主题适配 */
+[data-theme="light"] .entry-burst-ripple,
+[data-theme="light"] .entry-burst-ripple-2 {
+  border-color: var(--green);
+}
+
+/* reduced-motion 关闭动画 */
+@media (prefers-reduced-motion: reduce) {
+  .entry-burst-ripple {
+    animation: none;
+    display: none;
   }
 }
 
@@ -6673,4 +6751,61 @@ textarea:focus::placeholder {
   box-shadow:
     0 1px 2px rgba(15, 23, 42, 0.04),
     0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+/* === UI Polish: Empty State Component === */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 24px;
+  color: var(--muted);
+  text-align: center;
+}
+.empty-state-icon {
+  width: 48px;
+  height: 48px;
+  opacity: 0.4;
+  color: var(--muted);
+}
+.empty-state-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.empty-state-title {
+  font-size: var(--font-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-state-desc {
+  font-size: var(--font-ui);
+  color: var(--muted);
+  max-width: 320px;
+  line-height: 1.5;
+}
+.empty-state-cta {
+  margin-top: 8px;
+}
+
+/* === UI Polish: Skeleton Loading === */
+/* Note: .skeleton rule already defined above (see "骨架屏加载状态" section).
+   @keyframes shimmer already defined in Animation System; not redefined here. */
+
+/* === UI Polish: List Item Stagger Animation === */
+.list-item {
+  animation: fadeInUp 0.3s ease both;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+/* Note: @keyframes fadeInUp already defined in Animation System; not redefined here. */
+
+/* === UI Polish: View Transition === */
+.home-dashboard,
+.review-v2-layout,
+.video-layout,
+.title-optimizer,
+.compare-grid,
+.settings-center {
+  view-transition-name: view-content;
 }

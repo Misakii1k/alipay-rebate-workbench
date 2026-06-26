@@ -1,0 +1,25 @@
+# Checklist
+
+- [x] Google Fonts `@import` 包含 `Lora`,不包含 `Newsreader`(保留 `Poppins`、`Geist Mono`)
+- [x] `--font-display` 解析为 Poppins 字体栈
+- [x] `--font-body` 解析为 Lora 字体栈
+- [x] `--font-numeric` 与 `--font-micro` 仍为 Poppins
+- [x] 深色模式 `--ink` 为 `#faf9f5`(规范 Light)
+- [x] 深色模式 `--muted` 为 `#b0aea5`(规范 Mid Gray)
+- [x] 深色模式背景色为 `#1a1a18`(接近规范 Dark `#141413`)
+- [x] 深色模式 `--blue` 为 `#6a9bcc`(规范 Blue,不再是棕色 `#b05730`)
+- [x] 深色模式 `--blue-dim` 基于 `rgba(106, 155, 204, ...)`
+- [x] 深色模式新增 `--light-gray` 与 `--accent-green` token
+- [x] 浅色模式 `--ink` 为 `#141413`(规范 Dark)
+- [x] 浅色模式 `--muted` 为 `#6b6a63`(Mid Gray 加深以通过 AA)
+- [x] 浅色模式 `--blue` 为 `#6a9bcc`(规范 Blue)
+- [x] 浅色模式新增 `--light-gray: #e8e6dc` 与 `--accent-green: #788c5d`
+- [x] 浅色模式背景仍为 `#faf9f5`(规范 Light,未改动)
+- [x] body 深色背景渐变基底为 `#1a1a18`
+- [x] `.bento-video .bento-icon` 使用 orange `#d97757`
+- [x] `.bento-review .bento-icon` 使用 green `#788c5d`(规范 Green)
+- [x] `.bento-compare .bento-icon` 使用 blue `#6a9bcc`(规范 Blue)
+- [x] 浅色模式下 bento-review / bento-compare 图标色同步为规范 Green / Blue
+- [x] 全文不再出现 `#b05730` 或 `rgba(176, 87, 48, ...)`(除非有文档化的保留理由)
+- [x] 未修改任何类名、DOM 结构或业务逻辑(仅 CSS token 值与 font-family)
+- [x] 其他主题(apple.css / atelier.css)未被改动

@@ -473,8 +473,6 @@ function resolveRenderDimensions(
 ): { width: number; height: number } {
   if (settings.videoOutputSize === "portrait-1080") return { width: 1080, height: 1440 };
   if (settings.videoOutputSize === "portrait-1440") return { width: 1440, height: 1920 };
-  if (settings.videoOutputSize === "portrait-720") return { width: 720, height: 960 };
-  if (settings.videoOutputSize === "story-1080") return { width: 1080, height: 1920 };
   if (probe?.width && probe?.height) {
     return {
       width: normalizeEvenDimension(probe.width, 1080),

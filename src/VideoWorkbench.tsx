@@ -465,8 +465,6 @@ export function VideoWorkbench({
             <option value="auto">自动保真</option>
             <option value="portrait-1080">1080 × 1440</option>
             <option value="portrait-1440">1440 × 1920</option>
-            <option value="portrait-720">720 × 960</option>
-            <option value="story-1080">1080 × 1920</option>
           </select>
         </label>
         <label>
@@ -755,6 +753,18 @@ function TaskQueue({ tasks, currentIndex, onPick, onRemove }: { tasks: VideoTask
 
   return (
     <div className="task-queue">
+      {tasks.length === 0 && (
+        <div className="empty-state">
+          <div className="empty-state-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="6" width="18" height="12" rx="2" />
+              <path d="M10 9v6M14 9v6" />
+            </svg>
+          </div>
+          <div className="empty-state-title">队列为空</div>
+          <div className="empty-state-desc">选择视频模板并上传素材后,将在此显示渲染队列</div>
+        </div>
+      )}
       {tasks.length > visibleTasks.length && (
         <div className="task-queue-window-status">
           显示 {windowStart + 1}-{windowEnd} / {tasks.length} 个任务
@@ -763,7 +773,7 @@ function TaskQueue({ tasks, currentIndex, onPick, onRemove }: { tasks: VideoTask
       {visibleTasks.map((task, offset) => {
         const index = windowStart + offset;
         return (
-        <div key={task.id} className={clsx("task-queue-item", index === currentIndex && "active", task.status)}>
+        <div key={task.id} className={clsx("task-queue-item list-item", index === currentIndex && "active", task.status)} style={{ "--i": offset } as React.CSSProperties}>
           <button className="task-queue-label" onClick={() => onPick(index)} title="切换到这个视频任务">
             <span>{index + 1}. {task.outputName || "未命名"}</span>
             <em>{task.progress ? `${task.progress}%` : ""}</em>
