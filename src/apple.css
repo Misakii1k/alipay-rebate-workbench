@@ -2019,6 +2019,28 @@ html[data-ui-design="apple"] .remark-copy {
   box-shadow: none;
 }
 
+html[data-ui-design="apple"] .entry-name-result {
+  background: rgba(48, 209, 88, 0.08);
+  border-color: rgba(48, 209, 88, 0.15);
+}
+
+html[data-ui-design="apple"] .entry-name-result .entry-name-label {
+  color: #30d158;
+  background: rgba(48, 209, 88, 0.12);
+}
+
+html[data-ui-design="apple"] .entry-name-result .entry-name-value {
+  color: var(--ink);
+}
+
+html[data-ui-design="apple"] .entry-name-result .entry-name-account {
+  color: var(--muted);
+}
+
+html[data-ui-design="apple"] .entry-name-result.pulse::after {
+  animation-name: nameFieldWave;
+}
+
 /* Window controls */
 html[data-ui-design="apple"] .window-controls button {
   border-radius: var(--radius-sm);

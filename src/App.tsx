@@ -886,6 +886,13 @@ export default function App() {
                 <>
                   <div className="current-card">
                     <button className="remark-copy" onClick={copyRemark} title="点击复制当前备注文本到剪切板">{currentRow.remark}</button>
+                    {manualName && (
+                      <div className={clsx("entry-name-result", recognitionPulse > 0 && "pulse")} key={`entry-name-${recognitionPulse}`}>
+                        <span className="entry-name-label">tb名</span>
+                        <span className="entry-name-value">{manualName}</span>
+                        <span className="entry-name-account">{manualAccount}</span>
+                      </div>
+                    )}
                     <div className="amount">{currentRow.amount}</div>
                     <div className="progress-text">{currentIndex + 1} / {rows.length}</div>
                   </div>
@@ -900,7 +907,7 @@ export default function App() {
             <Panel title="识别结果" icon={Wand2}>
               <div className="form-stack">
                 <label><span>收款方支付宝账号</span><input value={manualAccount} onChange={(event) => setManualAccount(event.target.value)} /></label>
-                <label className={clsx("recognized-name-field", recognitionPulse > 0 && "pulse")} key={`name-pulse-${recognitionPulse}`}><span>收款方姓名</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
+                <label className="recognized-name-field"><span>收款方姓名</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
                 <button className="primary" onClick={saveManual} title="将当前填写的账号和姓名保存到本条返款记录"><Check size={18} /> 保存到当前行</button>
                 <button className="secondary-action light" onClick={skipCurrentRow} title="跳过本条记录，暂不填写账号和姓名"><ArrowRight size={18} /> 跳过当前行</button>
               </div>
