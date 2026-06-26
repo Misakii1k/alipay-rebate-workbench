@@ -9,10 +9,10 @@
 
 html[data-ui-design="apple"] {
   color-scheme: dark;
-  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", "Noto Sans SC Variable", sans-serif;
-  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
-  --font-numeric: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-micro: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", "HarmonyOS Sans SC", sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", "Segoe UI", "HarmonyOS Sans SC", sans-serif;
+  --font-numeric: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "HarmonyOS Sans SC", sans-serif;
+  --font-micro: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", "HarmonyOS Sans SC", sans-serif;
 
   /* Apple dark theme colors */
   --ink: #f5f5f7;

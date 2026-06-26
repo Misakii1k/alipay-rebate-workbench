@@ -1,9 +1,9 @@
 html[data-ui-design="atelier"] {
   color-scheme: dark;
-  --font-body: "Noto Sans SC Variable", "Inter Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-display: "Noto Sans SC Variable", Georgia, "Times New Roman", serif;
-  --font-numeric: "Inter Variable", "Noto Sans SC Variable", ui-monospace, monospace;
-  --font-micro: "Inter Variable", "Noto Sans SC Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: "HarmonyOS Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "HarmonyOS Sans SC", Georgia, "Times New Roman", serif;
+  --font-numeric: "HarmonyOS Sans SC", ui-monospace, monospace;
+  --font-micro: "HarmonyOS Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   --ink: #f2efe6;
   --muted: #a7a092;

@@ -1,9 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import "@fontsource-variable/inter";
-import "@fontsource-variable/noto-sans-sc";
+import "./assets/fonts/harmonyos-sans.css";
 import "./styles.css";
+import "./claude.css";
 import "./apple.css";
 import { DEFAULT_SETTINGS, DEFAULT_WORKBENCH_STATE, normalizeSettings } from "./lib/shared";
 

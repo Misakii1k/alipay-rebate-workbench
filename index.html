@@ -5,25 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/icon.png" />
 
-    <!-- 性能优化：DNS 预解析和预连接 -->
-    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-
-    <!-- 字体优化：使用 font-display: swap 避免 FOIT -->
     <style>
-      /* 关键 CSS 内联以加快首屏渲染 */
       body {
         margin: 0;
         padding: 0;
-        font-family: Poppins, "Noto Sans SC Variable", ui-sans-serif, system-ui, sans-serif;
+        font-family: "HarmonyOS Sans SC", ui-sans-serif, system-ui, sans-serif;
         background: #262624;
         color: #e2e8f0;
       }
       #root {
         min-height: 100vh;
       }
-      /* 防止字体加载时的闪烁 */
       .font-loading {
         visibility: hidden;
       }

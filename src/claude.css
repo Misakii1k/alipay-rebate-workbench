@@ -3,19 +3,14 @@
    Scoped under html[data-ui-design="claude"]
    ═══════════════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Geist+Mono:wght@400;500&display=swap');
-@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css');
-
-/* ─────────────────────────────────────────────
-   1. ROOT VARIABLES (dark mode default)
-   ───────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Geist+Mono:wght@400;500&display=swap');
 
 html[data-ui-design="claude"] {
   color-scheme: dark;
-  --font-body: Lora, "LXGW WenKai", Georgia, "Noto Serif SC", ui-serif, serif;
-  --font-display: Poppins, "Noto Sans SC Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-numeric: Poppins, "Inter Variable", ui-sans-serif, sans-serif;
-  --font-micro: Poppins, "Noto Sans SC Variable", ui-sans-serif, sans-serif;
+  --font-body: "HarmonyOS Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-display: Poppins, "HarmonyOS Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-numeric: Poppins, "HarmonyOS Sans SC", ui-sans-serif, sans-serif;
+  --font-micro: Poppins, "HarmonyOS Sans SC", ui-sans-serif, sans-serif;
 
   /* Claude dark theme colors — warm terra-cotta palette */
   --ink: #faf9f5;
