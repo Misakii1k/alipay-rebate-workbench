@@ -464,6 +464,7 @@ export function VideoWorkbench({
           <select value={settings.videoOutputSize} onChange={(event) => setVideoRenderOption("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}>
             <option value="auto">自动保真</option>
             <option value="portrait-1080">1080 × 1440</option>
+            <option value="portrait-1440">1440 × 1920</option>
             <option value="portrait-720">720 × 960</option>
             <option value="story-1080">1080 × 1920</option>
           </select>

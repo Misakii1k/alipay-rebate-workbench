@@ -472,6 +472,7 @@ function resolveRenderDimensions(
   fallback?: { width: number; height: number }
 ): { width: number; height: number } {
   if (settings.videoOutputSize === "portrait-1080") return { width: 1080, height: 1440 };
+  if (settings.videoOutputSize === "portrait-1440") return { width: 1440, height: 1920 };
   if (settings.videoOutputSize === "portrait-720") return { width: 720, height: 960 };
   if (settings.videoOutputSize === "story-1080") return { width: 1080, height: 1920 };
   if (probe?.width && probe?.height) {
@@ -533,6 +534,10 @@ function normalizedVideoTail(fps: number): string {
   return `setsar=1,fps=${fps},format=yuv420p`;
 }
 
+function colorMetadataArgs(): string[] {
+  return ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"];
+}
+
 async function buildBosTemplateArgs(
   ffmpegPath: string,
   payload: VideoRenderPayload,
@@ -573,6 +578,7 @@ async function buildBosTemplateArgs(
     String(fps),
     "-pix_fmt",
     "yuv420p",
+    ...colorMetadataArgs(),
     ...encoderArgs(settings.videoQualityMode),
     outputPath
   ];
@@ -632,7 +638,7 @@ async function buildVideoSliceArgs(payload: VideoRenderPayload, settings: AppSet
   ].join(";");
   args.push("-filter_complex", filters, "-map", "[out]");
   if (musicPath) args.push("-map", `${images.length}:a:0`, ...audioEncodeArgs(), "-shortest");
-  args.push("-r", String(fps), "-pix_fmt", "yuv420p", ...encoderArgs(settings.videoQualityMode), outputPath);
+  args.push("-r", String(fps), "-pix_fmt", "yuv420p", ...colorMetadataArgs(), ...encoderArgs(settings.videoQualityMode), outputPath);
   return args;
 }
 

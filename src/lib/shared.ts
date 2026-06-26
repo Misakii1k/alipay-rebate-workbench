@@ -5,7 +5,7 @@ export type VideoTaskStatus = "draft" | "ready" | "processing" | "done" | "faile
 export type FontScale = "small" | "normal" | "large";
 export type PerformanceMode = "auto" | "quality" | "balanced" | "low";
 export type VideoScanMode = "auto" | "speed" | "preview";
-export type VideoOutputSize = "auto" | "portrait-1080" | "portrait-720" | "story-1080";
+export type VideoOutputSize = "auto" | "portrait-1080" | "portrait-1440" | "portrait-720" | "story-1080";
 export type VideoQualityMode = "preserve" | "high" | "balanced";
 export type ReviewWorkspaceMode = "search" | "ai" | "mixed";
 export type ReviewThinkingMode = "off" | "auto" | "on";
@@ -693,7 +693,7 @@ function normalizeVideoScanMode(value: unknown, legacySpeedMode = false): VideoS
 }
 
 function normalizeVideoOutputSize(value: unknown): VideoOutputSize {
-  return value === "portrait-1080" || value === "portrait-720" || value === "story-1080" ? value : "auto";
+  return value === "portrait-1080" || value === "portrait-1440" || value === "portrait-720" || value === "story-1080" ? value : "auto";
 }
 
 function normalizeVideoQualityMode(value: unknown): VideoQualityMode {
