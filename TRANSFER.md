@@ -1,5 +1,24 @@
 # 电商运营工具箱 — Codex 交接材料
 
+## ⚠️ 回滚说明（Tauri 迁移期间）
+
+本项目正在从 Electron 迁移到 Tauri + Rust。在迁移期间，原 Electron 代码保留在以下三个位置之一，可随时回滚：
+
+1. **Git 标签**：`v-electron-final` — 指向迁移前的最后 commit
+2. **Git 分支**：`legacy/electron` — 与标签同 commit
+3. **物理备份目录**：`c:\Users\87850\Desktop\新项目-electron-backup\` — 不含 node_modules / dist / .git 的源码副本
+
+**回滚操作**：
+```bash
+git checkout legacy/electron
+npm install
+npm run dev
+```
+
+**Tauri 迁移产物位置**：`c:\Users\87850\Desktop\新项目\tauri-app\`（独立目录，不影响原 Electron 代码）
+
+---
+
 ## 项目一句话描述
 
 Electron + React (TypeScript) Windows 桌面应用，电商运营中控台，包含 5 个独立工具模块。

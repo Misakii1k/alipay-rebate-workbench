@@ -1,0 +1,14 @@
+[source.crates-io]
+replace-with = "ustc"
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+
+[net]
+git-fetch-with-cli = true
+
+# Use rust-lld (LLVM linker) instead of MSVC link.exe for the MSVC target.
+# This avoids the need for Visual Studio Build Tools.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = ["-C", "link-arg=/MANIFEST:NO"]

@@ -2,39 +2,39 @@
 
 ## 阶段 0：备份与回滚准备（前置必做）
 
-- [ ] Task 0.1: 在原项目根目录确认 git 工作树状态，提交所有未跟踪文件并 commit，确保 HEAD 干净
-- [ ] Task 0.2: 创建 git 标签 `v-electron-final` 指向当前 HEAD
-- [ ] Task 0.3: 创建 git 分支 `legacy/electron` 指向同一 commit
-- [ ] Task 0.4: 在上级目录创建物理备份 `..\新项目-electron-backup\`（robocopy 复制全部文件，排除 node_modules / dist / dist-renderer / dist-electron / target）
-- [ ] Task 0.5: 在 README 或 TRANSFER.md 顶部追加"回滚说明"小节，记录 `git checkout legacy/electron` 和物理备份位置
+- [x] Task 0.1: 在原项目根目录确认 git 工作树状态，提交所有未跟踪文件并 commit，确保 HEAD 干净 ✅ commit 1bdc1ca
+- [x] Task 0.2: 创建 git 标签 `v-electron-final` 指向当前 HEAD ✅ v-electron-final (annotated)
+- [x] Task 0.3: 创建 git 分支 `legacy/electron` 指向同一 commit ✅
+- [x] Task 0.4: 在上级目录创建物理备份 `..\新项目-electron-backup\`（robocopy 复制全部文件，排除 node_modules / dist / dist-renderer / dist-electron / target）✅ 242MB / 159 文件
+- [x] Task 0.5: 在 README 或 TRANSFER.md 顶部追加"回滚说明"小节，记录 `git checkout legacy/electron` 和物理备份位置 ✅
 
 ## 阶段 1：Tauri 项目骨架搭建
 
-- [ ] Task 1.1: 在项目根目录创建 `tauri-app/` 目录，初始化 Tauri 2.x 项目骨架（`npm create tauri-app@latest` 或手动搭建）
-  - [ ] SubTask 1.1.1: 配置 `tauri-app/package.json`，仅引入 React + Vite + TypeScript，移除所有 electron 依赖
-  - [ ] SubTask 1.1.2: 配置 `tauri-app/vite.config.ts`，base 路径适配 Tauri
-  - [ ] SubTask 1.1.3: 配置 `tauri-app/tsconfig.json`（继承原前端配置）
-  - [ ] SubTask 1.1.4: 配置 `tauri-app/src-tauri/tauri.conf.json`，设置 `productName=电商运营工具箱`、`appId=com.rebate.workbench`、`frontendDist=../dist-renderer`
-- [ ] Task 1.2: 将 `build/icon.ico` 复制到 `tauri-app/src-tauri/icons/icon.ico`
-- [ ] Task 1.3: 将 `assets/` 目录复制到 `tauri-app/resources/assets/`，并在 tauri.conf.json 的 `bundle.resources` 注册
-- [ ] Task 1.4: 配置 `bin/ffmpeg.exe` 和 `bin/es.exe` 作为 resources 分发（复制到 `tauri-app/resources/bin/`）
-- [ ] Task 1.5: 配置 NSIS 安装器参数（语言 2052、createDesktopShortcut、allowToChangeInstallationDirectory 等，对齐原 electron-builder 配置）
-- [ ] Task 1.6: 验证 `cargo tauri dev` 能启动空白应用窗口（仅验证骨架，不接业务逻辑）
+- [x] Task 1.1: 在项目根目录创建 `tauri-app/` 目录，初始化 Tauri 2.x 项目骨架（手动搭建）✅
+  - [x] SubTask 1.1.1: 配置 `tauri-app/package.json`（仅 React+Vite+TS，移除 electron）✅
+  - [x] SubTask 1.1.2: 配置 `tauri-app/vite.config.ts`（base: './'，outDir: dist-renderer）✅
+  - [x] SubTask 1.1.3: 配置 `tauri-app/tsconfig.json`（@/* → src/*）✅
+  - [x] SubTask 1.1.4: 配置 `tauri-app/src-tauri/tauri.conf.json`（productName/appId/frontendDist/NSIS）✅
+- [x] Task 1.2: 将 `build/icon.ico` 复制到 `tauri-app/src-tauri/icons/icon.ico` ✅
+- [x] Task 1.3: 将 `assets/` 目录复制到 `tauri-app/resources/assets/`，并在 tauri.conf.json 的 `bundle.resources` 注册 ✅
+- [ ] Task 1.4: ⚠️ bin/ 目录不存在（原项目无 ffmpeg.exe / es.exe），跳过；需用户提供外部二进制
+- [x] Task 1.5: 配置 NSIS 安装器参数（language=2052、createDesktopShortcut、allowToChangeInstallationDirectory、displayLanguageSelector=false）✅
+- [ ] Task 1.6: ⚠️ 阻塞：Rust 工具链未安装，`cargo tauri dev` 无法验证；待 Rust 安装后补做
 
 ## 阶段 2：前端代码迁移
 
-- [ ] Task 2.1: 将原项目 `src/` 目录整体复制到 `tauri-app/src/`（保留所有 .tsx / .ts / .css / 字体文件）
-- [ ] Task 2.2: 验证 `titleOptimizer.ts` 和 `compare.ts` 文件字节级保留（用 fc / diff 对比确认零修改）
-- [ ] Task 2.3: 创建 `tauri-app/src/lib/tauri-bridge.ts`，封装统一的 invoke 调用层（命名空间映射、错误处理、超时控制）
-- [ ] Task 2.4: 全局替换 `window.alipayWorkbench.XXX(args)` 调用为 `invoke('xxx', args)`，对应关系表见 spec.md MODIFIED Requirements 部分
-- [ ] Task 2.5: 修改 `src/main.tsx` 的浏览器 mock 逻辑，保留作为浏览器预览 fallback；新增 Tauri 模式检测（`'__TAURI_INTERNALS__' in window`），命中时走真实 invoke
-- [ ] Task 2.6: 替换 Electron 专属 API：
-  - [ ] SubTask 2.6.1: 文件对话框 → `@tauri-apps/plugin-dialog` 的 `open()`
-  - [ ] SubTask 2.6.2: 剪切板 → `@tauri-apps/plugin-clipboard-manager` 的 `readText()` / `writeText()`
-  - [ ] SubTask 2.6.3: 窗口控制（最小化/关闭/最大化）→ `@tauri-apps/api/window` 的 `appWindow` 方法
-  - [ ] SubTask 2.6.4: 自动更新 → `@tauri-apps/plugin-updater` 的 `check()`
-- [ ] Task 2.7: 调整 `vite.config.ts`（Tauri 版本），移除 electron 相关 entry，确保 Vite 单纯构建 React 前端
-- [ ] Task 2.8: 验证 `npm run build`（Tauri 前端）能产出 dist-renderer/，并在 `cargo tauri dev` 启动后看到首页 UI
+- [x] Task 2.1: 将原项目 `src/` 目录整体复制到 `tauri-app/src/` ✅
+- [x] Task 2.2: 验证 `compare.ts` 字节级保留（SHA256 一致）；⚠️ `titleOptimizer.ts` 原项目不存在（spec 文档与实际结构不符，已跳过）
+- [x] Task 2.3: 创建 `tauri-app/src/lib/tauri-bridge.ts`，封装 44 个 invoke 调用方法 ✅
+- [x] Task 2.4: 全局替换 `window.alipayWorkbench.XXX(args)` 调用，共替换 58 处 ✅
+- [x] Task 2.5: 修改 `src/main.tsx` 检测 Tauri 环境（isTauri()），浏览器 mock 保留作为 fallback ✅
+- [x] Task 2.6: 替换 Electron 专属 API：
+  - [x] SubTask 2.6.1: 文件对话框 → `@tauri-apps/plugin-dialog` ✅
+  - [x] SubTask 2.6.2: 剪切板 → `@tauri-apps/plugin-clipboard-manager` ✅
+  - [x] SubTask 2.6.3: 窗口控制 → `@tauri-apps/api/window` ✅
+  - [x] SubTask 2.6.4: 自动更新 → `@tauri-apps/plugin-updater` ✅
+- [x] Task 2.7: 调整 `vite.config.ts`（移除 electron 相关 entry）✅
+- [ ] Task 2.8: ⚠️ 阻塞：依赖未安装（npm install 未运行），`npm run build` 无法验证；待后续统一联调
 
 ## 阶段 3：Rust 后端模块迁移（按依赖顺序）
 
