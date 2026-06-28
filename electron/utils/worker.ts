@@ -39,7 +39,6 @@ const ONE_GB = 1024 * 1024 * 1024;
 const WORKER_LIMITS: Record<string, number> = {
   reviewIndexWorker: 1,
   thumbnailWorker: 1,
-  titleWorker: 1,
   videoIndexWorker: 1
 };
 const workerQueues = new Map<string, WorkerQueueState>();

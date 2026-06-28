@@ -5,11 +5,9 @@ import type { AppSettings } from "../../src/lib/shared";
 import { DEFAULT_SETTINGS, normalizeSettings } from "../../src/lib/shared";
 import {
   authorizeSettingsCapabilities,
-  isAuthorizedExactCapability,
   isAuthorizedFfmpegPath,
   isAuthorizedEverythingPath,
-  isAuthorizedRoot,
-  assertAuthorizedTitleExcel
+  isAuthorizedRoot
 } from "./capabilities";
 import { appendLog } from "./logger";
 import { userDataPath, ensureUserDataDir } from "./paths";
@@ -124,15 +122,6 @@ function sanitizeCapabilityFields(settings: AppSettings): AppSettings {
     reviewRootDir: next.reviewRootDir && isAuthorizedRoot("reviewRoot", next.reviewRootDir) ? next.reviewRootDir : "",
     videoLibraryDir: next.videoLibraryDir && isAuthorizedRoot("videoLibrary", next.videoLibraryDir) ? next.videoLibraryDir : "",
     videoOutputDir: next.videoOutputDir && isAuthorizedRoot("videoOutput", next.videoOutputDir) ? next.videoOutputDir : "",
-    titleKeywordExcelPath: (() => {
-      if (!next.titleKeywordExcelPath || !isAuthorizedExactCapability("titleExcel", next.titleKeywordExcelPath)) return "";
-      try {
-        assertAuthorizedTitleExcel(next.titleKeywordExcelPath);
-        return next.titleKeywordExcelPath;
-      } catch {
-        return "";
-      }
-    })(),
     ffmpegPath: next.ffmpegPath && isAuthorizedFfmpegPath(next.ffmpegPath) ? next.ffmpegPath : "",
     everythingEsPath: next.everythingEsPath && isAuthorizedEverythingPath(next.everythingEsPath) ? next.everythingEsPath : ""
   });

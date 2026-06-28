@@ -22,7 +22,6 @@ import {
   Settings,
   Sparkles,
   Sun,
-  Tags,
   Upload,
   Wand2,
   X
@@ -32,7 +31,6 @@ import clsx from "clsx";
 // 懒加载大型组件以优化初始加载性能
 const CompareWorkbench = lazy(() => import("./CompareWorkbench").then(m => ({ default: m.CompareWorkbench })));
 const ReviewAssistant = lazy(() => import("./ReviewAssistant").then(m => ({ default: m.ReviewAssistant })));
-const TitleOptimizer = lazy(() => import("./TitleOptimizer").then(m => ({ default: m.TitleOptimizer })));
 const VideoWorkbench = lazy(() => import("./VideoWorkbench").then(m => ({ default: m.VideoWorkbench })));
 
 import { buildRows, exportValidationErrors, formatExportFileName, isValidAccount } from "./lib/parsing";
@@ -58,11 +56,14 @@ import {
   syncActiveApiProfile
 } from "./lib/shared";
 
-type ViewKey = "home" | RebateViewKey | "video" | "review" | "title" | "compare" | "settings";
+type ViewKey = "home" | RebateViewKey | "video" | "review" | "compare" | "settings";
 
-const APP_VERSION = "1.0.1";
+const APP_VERSION = "1.0.4";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "1.0.4 识别成功提示条动画改为从左侧滑入，更顺滑。",
+  "1.0.3 识别成功提示条位置调整：从右侧「识别结果」框移到左侧「当前用户」框顶部，更醒目。",
+  "1.0.2 识别成功时金额方块会闪一下高亮提示，tb 名更清晰展示在卡片内。",
   "1.0.1 新增 Apple/Claude 双主题切换，优化各工具模块界面细节与交互体验。",
   "1.0.0 正式发布：恢复识别成功波纹提醒动画；视频新增 1440×1920 高清竖图尺寸并修复 H.264 输出偏黄问题。",
   "0.11.4 低配流畅度收口：收评文件夹改为展开时懒加载，连续收评/视频扫描会取消旧 worker；视频智能扫描新增自动/极速/标准三态，对比工具大名单分页渲染。",
@@ -119,7 +120,6 @@ const toolNavItems: Array<{ key: "home" | ToolboxTool; label: string; desc: stri
   { key: "rebate", label: "支付宝返款", desc: "批量导入金额备注，智能识别支付宝账号姓名，校验后导出 Excel", icon: FileSpreadsheet },
   { key: "video", label: "视频批量剪辑", desc: "模板化短视频制作，智能匹配视频库素材，一键批量渲染", icon: Film },
   { key: "review", label: "收评助手", desc: "搜索本地参考图，AI 生成买家好评文案，支持多种评价风格", icon: MessageSquareText },
-  { key: "title", label: "标题词优化", desc: "分析标题搜索权重评分，辅助优化关键词组合，控制在 54 字节内", icon: Tags },
   { key: "compare", label: "评价返款对比", desc: "导入返款名单和实际评价，自动去重匹配，差异置顶标红", icon: Check },
   { key: "settings", label: "设置", desc: "配置 API 密钥、文件路径、主题外观、快捷键等全局选项", icon: Settings }
 ];
@@ -228,12 +228,19 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [videoState, setVideoState] = useState<VideoWorkbenchState | null>(null);
   const [recognitionPulse, setRecognitionPulse] = useState(0);
-  const [entryBurst, setEntryBurst] = useState(0);
+  const [showMarquee, setShowMarquee] = useState(false);
   const lastClipboardSignature = useRef("");
   const autoRecognizingRef = useRef(false);
   const skipAutoRecognizeRef = useRef(false);
   const recognizeAbortRef = useRef<AbortController | null>(null);
   const completionNotifiedRef = useRef(false);
+  const marqueeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (marqueeTimerRef.current) clearTimeout(marqueeTimerRef.current);
+    };
+  }, []);
 
   const parsed = useMemo(() => buildRows(amountInput, remarkInput), [amountInput, remarkInput]);
   const currentRow = rows[currentIndex];
@@ -529,7 +536,9 @@ export default function App() {
         )
       );
       setRecognitionPulse((value) => value + 1);
-      setEntryBurst((value) => value + 1);
+      setShowMarquee(true);
+      if (marqueeTimerRef.current) clearTimeout(marqueeTimerRef.current);
+      marqueeTimerRef.current = setTimeout(() => setShowMarquee(false), 3000);
       showToast(`已识别：${result.name} / ${result.account}`);
       void runCloudReview(recognizedIndex, rawText, {
         account: result.account,
@@ -875,25 +884,25 @@ export default function App() {
 
         {view === "entry" && (
           <section className="entry-layout">
-            {entryBurst > 0 && (
-              <div className="entry-burst-overlay" key={`burst-${entryBurst}`} aria-hidden="true">
-                <span className="entry-burst-ripple" />
-                <span className="entry-burst-ripple entry-burst-ripple-2" />
-              </div>
-            )}
             <Panel title="当前用户" icon={Clipboard} className="hero-panel">
               {currentRow ? (
                 <>
+                  {lastResult && showMarquee && (
+                    <div className="recognition-inline-notice" key={`notice-${recognitionPulse}`}>
+                      <Check className="notice-icon" size={13} />
+                      <span className="notice-text">
+                        识别成功：{manualName || lastResult.name} / {manualAccount || lastResult.account}
+                      </span>
+                    </div>
+                  )}
                   <div className="current-card">
-                    <button className="remark-copy" onClick={copyRemark} title="点击复制当前备注文本到剪切板">{currentRow.remark}</button>
                     {manualName && (
-                      <div className={clsx("entry-name-result", recognitionPulse > 0 && "pulse")} key={`entry-name-${recognitionPulse}`}>
-                        <span className="entry-name-label">tb名</span>
-                        <span className="entry-name-value">{manualName}</span>
-                        <span className="entry-name-account">{manualAccount}</span>
+                      <div className="entry-name-display">
+                        <span className="entry-name-text">{manualName}</span>
                       </div>
                     )}
-                    <div className="amount">{currentRow.amount}</div>
+                    <button className="remark-copy" onClick={copyRemark} title="点击复制当前备注文本到剪切板">{currentRow.remark}</button>
+                    <div className={clsx("amount", recognitionPulse > 0 && "pulse")} key={`amount-pulse-${recognitionPulse}`}>{currentRow.amount}</div>
                     <div className="progress-text">{currentIndex + 1} / {rows.length}</div>
                   </div>
                   <div className="manual-recognize">
@@ -907,7 +916,7 @@ export default function App() {
             <Panel title="识别结果" icon={Wand2}>
               <div className="form-stack">
                 <label><span>收款方支付宝账号</span><input value={manualAccount} onChange={(event) => setManualAccount(event.target.value)} /></label>
-                <label className="recognized-name-field"><span>收款方姓名</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
+                <label className={clsx("recognized-name-field", recognitionPulse > 0 && "pulse")} key={`name-pulse-${recognitionPulse}`}><span>收款方姓名</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
                 <button className="primary" onClick={saveManual} title="将当前填写的账号和姓名保存到本条返款记录"><Check size={18} /> 保存到当前行</button>
                 <button className="secondary-action light" onClick={skipCurrentRow} title="跳过本条记录，暂不填写账号和姓名"><ArrowRight size={18} /> 跳过当前行</button>
               </div>
@@ -927,7 +936,6 @@ export default function App() {
         <Suspense fallback={<div className="loading-fallback"><Loader2 className="spin" size={32} /><span>加载中...</span></div>}>
           {view === "video" && <VideoWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} onStateChange={setVideoState} showToast={showToast} />}
           {view === "review" && <ReviewAssistant settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} showToast={showToast} modelConnected={modelStatus.state === "connected"} />}
-          {view === "title" && <TitleOptimizer settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} showToast={showToast} />}
           {view === "compare" && <CompareWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} showToast={showToast} />}
         </Suspense>
 
@@ -968,7 +976,6 @@ function ToolboxHome({ settings, pendingCount, totalAmount, onOpen }: { settings
     { className: "bento-main", icon: FileSpreadsheet, label: "核心工具", title: "支付宝批量返款", text: "导入金额和备注，识别账号姓名，校验后导出支付宝模板。", view: "import" as ViewKey },
     { className: "bento-video", icon: Film, label: "视频生产", title: "批量剪辑", text: "模板化短视频，支持帛先生和切片模板。", view: "video" as ViewKey },
     { className: "bento-review", icon: MessageSquareText, label: "评价运营", title: "收评助手", text: "检索参考图并生成买家好评文案。", view: "review" as ViewKey },
-    { className: "bento-title", icon: Tags, label: "关键词算法", title: "标题词优化", text: "分析已有标题评分，辅助生成严格 54 字节标题。", view: "title" as ViewKey },
     { className: "bento-compare", icon: Check, label: "核对", title: "评价返款对比", text: "自动去重，差异置顶标红。", view: "compare" as ViewKey },
     { className: "bento-settings", icon: Settings, label: "配置", title: "全局设置", text: "API、路径、规则与纠偏。", view: "settings" as ViewKey }
   ];
@@ -1177,7 +1184,7 @@ function CloudReviewCard({ cloudReview, onAdopt, onKeepLocal }: { cloudReview?: 
 
 function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings: AppSettings; onSave: (settings: AppSettings) => void; modelStatus: ModelConnectionStatus; onTestModel: (settings: AppSettings) => Promise<ModelConnectionStatus> }) {
   const [draft, setDraft] = useState(settings);
-  const [section, setSection] = useState<"global" | "rebate" | "video" | "review" | "title" | "compare">("global");
+  const [section, setSection] = useState<"global" | "rebate" | "video" | "review" | "compare">("global");
   const [showApiKey, setShowApiKey] = useState(false);
   const [modelList, setModelList] = useState<{ id: string; name: string }[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -1197,11 +1204,6 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
     const result = await window.alipayWorkbench.selectFiles({ kind: "ffmpeg", multi: false });
     if (!result.canceled && result.paths[0]) set("ffmpegPath", result.paths[0]);
   };
-  const pickTitleExcel = async () => {
-    const result = await window.alipayWorkbench.selectTitleKeywordExcel();
-    if (!result.canceled && result.paths[0]) set("titleKeywordExcelPath", result.paths[0]);
-  };
-
   const switchProfile = (id: string) => {
     setDraft((prev) => switchActiveApiProfile(prev, id));
   };
@@ -1312,7 +1314,6 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
     { key: "rebate" as const, label: "支付宝返款", icon: FileSpreadsheet, description: "导出规则与识别设置" },
     { key: "video" as const, label: "视频批量剪辑", icon: Film, description: "视频库、输出目录、FFmpeg" },
     { key: "review" as const, label: "收评助手", icon: MessageSquareText, description: "图片根目录与 AI 文案参数" },
-    { key: "title" as const, label: "标题词优化", icon: Tags, description: "市场关键词 Excel" },
     { key: "compare" as const, label: "评价返款对比", icon: Check, description: "对比验证与展示" }
   ];
   return (
@@ -1436,7 +1437,6 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
       </div></Panel></section>}
       {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-1440">1440 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
       {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><div className="hint-card">自动更新暂未启用；发布源和签名策略确认后再开放。</div></div></Panel></section>}
-      {section === "title" && <section className="settings-grid single"><Panel title="标题词优化设置" icon={Tags}><div className="form-stack"><label><span>市场关键词 Excel 路径</span><input value={draft.titleKeywordExcelPath} onChange={(event) => set("titleKeywordExcelPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickTitleExcel()} title="选择标题关键词 Excel 文件"><FileSpreadsheet size={17} /> 选择标题关键词 Excel</button><div className="hint-card">默认读取桌面“市场关键词帛先生.xlsx”。文件更新后会重新解析和加权。</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><span className="settings-autosave-hint">{lastSaved ? `已自动保存 ${new Date(lastSaved).toLocaleTimeString()}` : ""}</span></div>
     </section>
@@ -1554,16 +1554,16 @@ function isTodayRebateRow(row: RebateRow) {
 
 function toolForView(view: ViewKey): "home" | ToolboxTool {
   if (view === "home") return "home";
-  if (view === "video" || view === "review" || view === "title" || view === "compare" || view === "settings") return view;
+  if (view === "video" || view === "review" || view === "compare" || view === "settings") return view;
   return "rebate";
 }
 
 function viewTitle(view: ViewKey) {
-  return { home: "工具首页", import: "导入金额与备注", entry: "逐条识别收款信息", preview: "表格预览与修正", export: "导出支付宝模板", video: "视频批量剪辑", review: "收评助手", title: "标题词优化", compare: "评价返款对比", settings: "设置中心" }[view];
+  return { home: "工具首页", import: "导入金额与备注", entry: "逐条识别收款信息", preview: "表格预览与修正", export: "导出支付宝模板", video: "视频批量剪辑", review: "收评助手", compare: "评价返款对比", settings: "设置中心" }[view];
 }
 
 function toolEyebrow(tool: "home" | ToolboxTool) {
-  return { home: "工具首页", rebate: "支付宝批量返款", video: "电商视频制作", review: "评价运营", title: "关键词算法", compare: "评价状态核对", settings: "全局配置" }[tool];
+  return { home: "工具首页", rebate: "支付宝批量返款", video: "电商视频制作", review: "评价运营", compare: "评价状态核对", settings: "全局配置" }[tool];
 }
 
 function statusLabel(status: RebateRow["status"]) {

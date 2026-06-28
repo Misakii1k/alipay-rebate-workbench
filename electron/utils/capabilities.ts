@@ -9,7 +9,6 @@ export type CapabilityKind =
   | "reviewRoot"
   | "videoLibrary"
   | "videoOutput"
-  | "titleExcel"
   | "ffmpeg"
   | "everything";
 
@@ -109,7 +108,6 @@ export function authorizeFileCapability(kind: CapabilityKind, filePath: string, 
     if (!existsSync(filePath) || !isFile(filePath) || !extensionAllowed(filePath, allowedExts)) return false;
     if (kind === "ffmpeg" && !executableNameIs(filePath, "ffmpeg.exe")) return false;
     if (kind === "everything" && !executableNameIs(filePath, "es.exe")) return false;
-    if (kind === "titleExcel") validatePathSafety(filePath);
     bucket(kind).add(canonicalPath(filePath));
     return true;
   } catch {
@@ -126,9 +124,6 @@ export function authorizeSettingsCapabilities(settings: AppSettings, source: "lo
   if (source === "load" || isAuthorizedRoot("mediaRoot", settings.videoLibraryDir)) authorizeDirectoryCapability("mediaRoot", settings.videoLibraryDir);
   if (source === "load" || isAuthorizedRoot("mediaRoot", settings.videoOutputDir)) authorizeDirectoryCapability("mediaRoot", settings.videoOutputDir);
 
-  if (source === "load" || isAuthorizedExactCapability("titleExcel", settings.titleKeywordExcelPath)) {
-    authorizeFileCapability("titleExcel", settings.titleKeywordExcelPath, new Set([".xlsx", ".xlsm"]));
-  }
   if (settings.sliceCustomMusicPath && (source === "load" || isAuthorizedRoot("mediaRoot", path.dirname(settings.sliceCustomMusicPath)))) {
     authorizeDirectoryCapability("mediaRoot", path.dirname(settings.sliceCustomMusicPath));
   }
@@ -181,13 +176,6 @@ export function isAuthorizedFfmpegPath(filePath: string): boolean {
 
 export function isAuthorizedEverythingPath(filePath: string): boolean {
   return Boolean(filePath && executableNameIs(filePath, "es.exe") && existsSync(filePath) && (isKnownEverything(filePath) || isAuthorizedExactCapability("everything", filePath)));
-}
-
-export function assertAuthorizedTitleExcel(filePath: string): string {
-  if (!isAuthorizedExactCapability("titleExcel", filePath) || !extensionAllowed(filePath, new Set([".xlsx", ".xlsm"]))) {
-    throw new Error("Title keyword Excel is not authorized.");
-  }
-  return canonicalPath(filePath);
 }
 
 export function isAuthorizedMediaPath(filePath: string, allowedExts?: Set<string>): boolean {

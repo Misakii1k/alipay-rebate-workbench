@@ -1,4 +1,4 @@
-export type ToolboxTool = "rebate" | "video" | "review" | "title" | "compare" | "settings";
+export type ToolboxTool = "rebate" | "video" | "review" | "compare" | "settings";
 export type RebateViewKey = "import" | "entry" | "preview" | "export";
 export type VideoTemplateId = "bos-template" | "video-slice";
 export type VideoTaskStatus = "draft" | "ready" | "processing" | "done" | "failed";
@@ -63,7 +63,6 @@ export interface AppSettings {
   reviewMentionValue: boolean;
   reviewProductDescription: string;
   reviewCopyCount: number;
-  titleKeywordExcelPath: string;
   sliceMusicPresetId: string;
   sliceCustomMusicPath: string;
   reviewApiProfileId: string;
@@ -74,8 +73,6 @@ export interface AppSettings {
   reviewWorkspaceMode: ReviewWorkspaceMode;
   reviewTargetLength: number;
   reviewThinkingMode: ReviewThinkingMode;
-  titleAiSelectionEnabled: boolean;
-  titleExtraKeywords: string;
   compareAutoOpenReminderDialog: boolean;
   compareShowPassedRowsAfterVerify: boolean;
   fontScale: FontScale;
@@ -215,171 +212,6 @@ export interface ReviewChatResult {
   reply: string;
 }
 
-export type TitleKeywordSource = "market" | "breakdown" | "blue-ocean" | "manual";
-export type TitleGenerationStrategy = "legacy" | "stacked-v2";
-export type TitleCandidateMode = "traffic" | "precise" | "category" | "blue-ocean" | "legacy";
-
-export interface TitleKeywordEntry {
-  keyword: string;
-  category: string;
-  source: TitleKeywordSource;
-  rank?: number;
-  weight: number;
-  trend?: number;
-  blueOceanScore?: number;
-  metrics?: Record<string, string | number>;
-}
-
-export interface TitleCategoryData {
-  name: string;
-  source: "market" | "breakdown" | "blue-ocean" | "mixed";
-  keywords: TitleKeywordEntry[];
-  blueOceanWords: TitleKeywordEntry[];
-  keywordCount: number;
-}
-
-export interface TitleKeywordData {
-  excelPath: string;
-  loadedAt: string;
-  modifiedAt?: string;
-  categories: TitleCategoryData[];
-  totalKeywords: number;
-  warnings: string[];
-}
-
-export interface TitleProductProfile {
-  originalName: string;
-  normalizedName: string;
-  season: string;
-  series: string;
-  model: string;
-  materials: string[];
-  category: "long-pants" | "shorts" | "pants" | "top" | "unknown";
-  features: string[];
-}
-
-export interface TitleGeneratePayload {
-  productName: string;
-  categoryName?: string;
-  variantCount?: number;
-  strategy?: TitleGenerationStrategy;
-  targetKeywords?: string[];
-}
-
-export interface TitleAnalyzePayload {
-  productName: string;
-  title: string;
-  categoryName?: string;
-  strategy?: TitleGenerationStrategy;
-  targetKeywords?: string[];
-}
-
-export interface TitleRuleCheck {
-  key: string;
-  label: string;
-  passed: boolean;
-  required: boolean;
-  detail: string;
-  missing?: string[];
-}
-
-export interface TitleKeywordHit {
-  keyword: string;
-  category: string;
-  source: TitleKeywordSource;
-  weight: number;
-  compositeValue: number;
-  matchType: "exact" | "ordered" | "partial";
-  rank?: number;
-}
-
-export interface SubstringHit {
-  keyword: string;
-  category: string;
-  source: TitleKeywordSource;
-  start: number;
-  length: number;
-  value: number;
-  rank?: number;
-}
-
-export interface TitleRecommendation {
-  type: "insert" | "reorder" | "missing-element" | "unhit-keyword" | "byte-tip" | "blue-ocean" | "root-hint" | "duplicate";
-  message: string;
-  detail: string;
-  estimatedGain: number;
-}
-
-export interface TitleScoreBreakdown {
-  keywordScore: number;
-  byteScore: number;
-  blueOceanScore: number;
-}
-
-export interface TitleCandidate {
-  id: string;
-  mode: TitleCandidateMode;
-  label: string;
-  title: string;
-  body: string;
-  bodyBytes: number;
-  totalBytes: number;
-  score: number;
-  tokens: string[];
-  ruleChecks: TitleRuleCheck[];
-  keywordHits: TitleKeywordHit[];
-  substringHits: SubstringHit[];
-  recommendations: TitleRecommendation[];
-  suggestions: string[];
-  strategy?: TitleGenerationStrategy;
-  strictPass?: boolean;
-  targetHits?: Array<{ target: string; matched: string; kind: "exact" | "replacement" | "expanded"; source: "manual" | "excel"; rank?: number; category?: string }>;
-  sourceTerms?: Array<{ text: string; source: TitleKeywordSource | "manual" | "derived" | "rule"; parent?: string; rank?: number; category?: string }>;
-  blockedTerms?: string[];
-  unplacedTerms?: string[];
-}
-
-export interface TitleGenerationDiagnostics {
-  poolSize: number;
-  recalledSize: number;
-  generatedCount: number;
-  elapsedMs: number;
-  exactFitCount?: number;
-  strictRejectedCount?: number;
-  legacyCandidateCount?: number;
-}
-
-export interface TitleScoreResult {
-  ok: boolean;
-  message: string;
-  product: TitleProductProfile;
-  selectedCategory?: string;
-  candidates: TitleCandidate[];
-  warnings: string[];
-  diagnostics?: TitleGenerationDiagnostics;
-}
-
-export interface TitleAnalysisResult {
-  ok: boolean;
-  message: string;
-  product: TitleProductProfile;
-  selectedCategory?: string;
-  title: string;
-  body: string;
-  bodyBytes: number;
-  totalBytes: number;
-  score: number;
-  scoreBreakdown?: TitleScoreBreakdown;
-  grade: "excellent" | "good" | "needs-work" | "blocked";
-  candidate: TitleCandidate | null;
-  recommendations: TitleRecommendation[];
-  substringHits: SubstringHit[];
-  suggestedTitles: TitleCandidate[];
-  endingAdvice?: string;
-  warnings: string[];
-  diagnostics?: TitleGenerationDiagnostics;
-}
-
 export interface WindowControls {
   minimizeWindow: () => Promise<void>;
   toggleMaximizeWindow: () => Promise<void>;
@@ -482,8 +314,6 @@ export const DEFAULT_API_PROFILE: ApiProfile = {
   visionModel: "gpt-4.1-mini"
 };
 
-export const DEFAULT_TITLE_KEYWORD_EXCEL_PATH = "C:\\Users\\87850\\Desktop\\市场关键词帛先生.xlsx";
-
 export const DEFAULT_SETTINGS: AppSettings = {
   apiProfiles: [DEFAULT_API_PROFILE],
   activeApiProfileId: DEFAULT_API_PROFILE.id,
@@ -524,7 +354,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewMentionValue: true,
   reviewProductDescription: "",
   reviewCopyCount: 6,
-  titleKeywordExcelPath: DEFAULT_TITLE_KEYWORD_EXCEL_PATH,
   sliceMusicPresetId: "",
   sliceCustomMusicPath: "",
   reviewApiProfileId: "",
@@ -535,8 +364,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewWorkspaceMode: "mixed",
   reviewTargetLength: 80,
   reviewThinkingMode: "auto",
-  titleAiSelectionEnabled: true,
-  titleExtraKeywords: "",
   compareAutoOpenReminderDialog: true,
   compareShowPassedRowsAfterVerify: true,
   fontScale: "normal",
@@ -621,7 +448,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     learningPromptNotes: String(raw.learningPromptNotes ?? ""),
     showBeginnerGuide: Boolean(raw.showBeginnerGuide ?? DEFAULT_SETTINGS.showBeginnerGuide),
     completedTours: Array.isArray(raw.completedTours)
-      ? raw.completedTours.filter((tool): tool is ToolboxTool => ["rebate", "video", "review", "title", "compare", "settings"].includes(String(tool)))
+      ? raw.completedTours.filter((tool): tool is ToolboxTool => ["rebate", "video", "review", "compare", "settings"].includes(String(tool)))
       : [],
     toolboxName: String(raw.toolboxName ?? DEFAULT_SETTINGS.toolboxName),
     videoLibraryDir: String(raw.videoLibraryDir ?? ""),
@@ -641,7 +468,6 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     reviewMentionValue: Boolean(raw.reviewMentionValue ?? DEFAULT_SETTINGS.reviewMentionValue),
     reviewProductDescription: String(raw.reviewProductDescription ?? ""),
     reviewCopyCount: clampNumber(raw.reviewCopyCount, 3, 12, DEFAULT_SETTINGS.reviewCopyCount),
-    titleKeywordExcelPath: String(raw.titleKeywordExcelPath ?? DEFAULT_SETTINGS.titleKeywordExcelPath),
     sliceMusicPresetId: String(raw.sliceMusicPresetId ?? ""),
     sliceCustomMusicPath: String(raw.sliceCustomMusicPath ?? ""),
     reviewApiProfileId: String(raw.reviewApiProfileId ?? ""),
@@ -652,8 +478,6 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     reviewWorkspaceMode: normalizeReviewWorkspaceMode(raw.reviewWorkspaceMode),
     reviewTargetLength: clampNumber(raw.reviewTargetLength, 30, 100, DEFAULT_SETTINGS.reviewTargetLength),
     reviewThinkingMode: normalizeReviewThinkingMode(raw.reviewThinkingMode),
-    titleAiSelectionEnabled: Boolean(raw.titleAiSelectionEnabled ?? DEFAULT_SETTINGS.titleAiSelectionEnabled),
-    titleExtraKeywords: String(raw.titleExtraKeywords ?? ""),
     compareAutoOpenReminderDialog: Boolean(raw.compareAutoOpenReminderDialog ?? DEFAULT_SETTINGS.compareAutoOpenReminderDialog),
     compareShowPassedRowsAfterVerify: Boolean(raw.compareShowPassedRowsAfterVerify ?? DEFAULT_SETTINGS.compareShowPassedRowsAfterVerify),
     fontScale: normalizeFontScale(raw.fontScale),

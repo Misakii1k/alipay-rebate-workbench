@@ -5,7 +5,6 @@ import { registerAllHandlers } from "./handlers";
 import { setMainWindow as setExportMainWindow } from "./handlers/export";
 import { setMainWindow as setUpdateMainWindow, initializeAutoUpdater } from "./handlers/update";
 import { setMainWindow as setFilesMainWindow } from "./handlers/files";
-import { setMainWindow as setTitleMainWindow } from "./handlers/title";
 import { setMainWindow as setVideoMainWindow } from "./handlers/video";
 import { setMainWindow as setReviewMainWindow } from "./handlers/review";
 import { loadSettings } from "./utils/settings";
@@ -66,7 +65,6 @@ app.whenReady().then(async () => {
   setExportMainWindow(mainWindow);
   setUpdateMainWindow(mainWindow);
   setFilesMainWindow(mainWindow);
-  setTitleMainWindow(mainWindow);
   setVideoMainWindow(mainWindow);
   setReviewMainWindow(mainWindow);
 

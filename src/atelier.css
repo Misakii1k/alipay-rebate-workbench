@@ -857,26 +857,17 @@ html[data-ui-design="atelier"] .remark-copy {
   box-shadow: none;
 }
 
-html[data-ui-design="atelier"] .entry-name-result {
-  background: rgba(52, 211, 153, 0.08);
-  border-color: rgba(52, 211, 153, 0.15);
+html[data-ui-design="atelier"] .entry-name-display {
+  background: rgba(52, 211, 153, 0.10);
+  border-color: rgba(52, 211, 153, 0.18);
 }
 
-html[data-ui-design="atelier"] .entry-name-result .entry-name-label {
+html[data-ui-design="atelier"] .entry-name-text {
   color: var(--green);
-  background: rgba(52, 211, 153, 0.12);
 }
 
-html[data-ui-design="atelier"] .entry-name-result .entry-name-value {
-  color: var(--ink);
-}
-
-html[data-ui-design="atelier"] .entry-name-result .entry-name-account {
-  color: var(--muted);
-}
-
-html[data-ui-design="atelier"] .entry-name-result.pulse::after {
-  animation-name: nameFieldWave;
+html[data-ui-design="atelier"] .amount.pulse {
+  animation-name: amountFlash;
 }
 
 html[data-ui-design="atelier"] table,

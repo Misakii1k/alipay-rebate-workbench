@@ -18,11 +18,6 @@ import type {
   ReviewSearchResult,
   SelectFilesOptions,
   SelectPathResult,
-  TitleAnalysisResult,
-  TitleAnalyzePayload,
-  TitleGeneratePayload,
-  TitleKeywordData,
-  TitleScoreResult,
   UpdateStatus,
   VideoCandidate,
   VideoRenderProgress,
@@ -49,12 +44,6 @@ const api = {
   selectFiles: (options: SelectFilesOptions): Promise<SelectPathResult> => ipcRenderer.invoke("files:select", options),
   getPathForFile: (file: File): string => webUtils?.getPathForFile(file) || (file as File & { path?: string }).path || "",
   selectDirectory: (title: string, kind?: DirectoryCapabilityKind): Promise<SelectPathResult> => ipcRenderer.invoke("directory:select", title, kind),
-  selectTitleKeywordExcel: (): Promise<SelectPathResult> => ipcRenderer.invoke("title:selectExcel"),
-  loadTitleKeywordData: (settings: AppSettings): Promise<TitleKeywordData> => ipcRenderer.invoke("title:loadKeywordData", settings),
-  analyzeTitle: (settings: AppSettings, payload: TitleAnalyzePayload): Promise<TitleAnalysisResult> =>
-    ipcRenderer.invoke("title:analyze", settings, payload),
-  generateTitleCandidates: (settings: AppSettings, payload: TitleGeneratePayload): Promise<TitleScoreResult> =>
-    ipcRenderer.invoke("title:generateCandidates", settings, payload),
   getFfmpegStatus: (settings: AppSettings): Promise<FfmpegStatus> => ipcRenderer.invoke("ffmpeg:status", settings),
   diagnoseFfmpeg: (settings: AppSettings): Promise<{ items: Array<{ label: string; passed: boolean; detail: string }>; suggestions: string[]; ok: boolean }> => ipcRenderer.invoke("ffmpeg:diagnose", settings),
   autoFixFfmpeg: (settings: AppSettings): Promise<{ fixed: string[]; failed: string[]; settingsPatch: Partial<AppSettings> | null }> => ipcRenderer.invoke("ffmpeg:autoFix", settings),
@@ -81,7 +70,6 @@ const api = {
     return () => ipcRenderer.removeListener("review:scanProgress", listener);
   },
   startDragFiles: (paths: string[]): Promise<void> => ipcRenderer.invoke("drag:startFiles", paths),
-  enhanceTitlePool: (settings: AppSettings, payload: { productName: string; categoryName?: string; pool: Array<{ text: string; weight: number; source: string }> }): Promise<{ ok: boolean; selected: string[]; suggested: string[]; reason?: string }> => ipcRenderer.invoke("title:enhancePool", settings, payload),
   generateReviewCopy: (settings: AppSettings, options: ReviewGenerationOptions): Promise<ReviewGenerationResult> =>
     ipcRenderer.invoke("review:generateCopy", settings, options),
   reviewChat: (settings: AppSettings, payload: ReviewChatPayload): Promise<ReviewChatResult> =>

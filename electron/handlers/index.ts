@@ -10,7 +10,6 @@ import * as everythingHandler from "./everything";
 import * as updateHandler from "./update";
 import * as filesHandler from "./files";
 import * as logHandler from "./log";
-import * as titleHandler from "./title";
 import * as ffmpegHandler from "./ffmpeg";
 import * as videoHandler from "./video";
 import * as reviewHandler from "./review";
@@ -19,7 +18,7 @@ import * as recognitionHandler from "./recognition";
 /**
  * 注册所有已模块化的 IPC handlers。
  *
- * 已完成的 handlers（18个模块，43个handler）：
+ * 已完成的 handlers（17个模块，38个handler）：
  * - settings (2个): settings:load, settings:save
  * - workbench (4个): workbench:load/save, videoWorkbench:load/save
  * - window (3个): window:minimize/toggleMaximize/close
@@ -31,7 +30,6 @@ import * as recognitionHandler from "./recognition";
  * - update (3个): update:check/download/install
  * - files (2个): files:select, directory:select
  * - log (1个): log:append
- * - title (5个): title:selectExcel/loadKeywordData/analyze/generateCandidates/enhancePool
  * - ffmpeg (3个): ffmpeg:status/diagnose/autoFix
  * - video (2个): video:scanLibrary/renderTask
  * - review (6个): review:scanAssets/loadThumbnails/loadThumbnailBatch/rebuildIndex/generateCopy, drag:startFiles
@@ -52,7 +50,6 @@ export function registerAllHandlers(ipcMain: IpcMain): void {
   updateHandler.register(ipcMain);
   filesHandler.register(ipcMain);
   logHandler.register(ipcMain);
-  titleHandler.register(ipcMain);
   ffmpegHandler.register(ipcMain);
   videoHandler.register(ipcMain);
   reviewHandler.register(ipcMain);
