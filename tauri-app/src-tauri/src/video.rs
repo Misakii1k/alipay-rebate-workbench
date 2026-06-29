@@ -283,14 +283,19 @@ pub fn scan_video_library(
     let root_path = PathBuf::from(root);
     let terms = build_match_terms(&format!("{} {}", product_name, color_name));
 
-    // 优先使用 Everything 搜索
+    // 优先使用 Everything 搜索；返回空（服务未运行/索引未就绪）时回退 walkdir 全目录扫描。
+    // 注意：内置 es.exe 总能解析到路径，所以不能只看「es_path 是否为空」来决定是否降级，
+    // 必须看「实际搜索是否拿到结果」，否则 Everything 服务没开就永远搜不到素材。
     let es_path = everything::resolve_everything_es_path(settings);
-    let mut candidates: Vec<VideoCandidate> = if !es_path.is_empty() {
-        let mut exts: HashSet<String> = IMAGE_EXTS.iter().chain(VIDEO_EXTS.iter()).map(|s| s.to_string()).collect();
-        let _ = &mut exts; // 仅用于类型推断
+    let found_paths: Vec<String> = if !es_path.is_empty() {
         let exts_set: HashSet<String> = IMAGE_EXTS.iter().chain(VIDEO_EXTS.iter()).map(|s| s.to_string()).collect();
         let query = format!("{} {}", product_name, color_name);
-        let found_paths = everything::search_with_everything(&es_path, root, &query, &exts_set, 500);
+        everything::search_with_everything(&es_path, root, &query, &exts_set, 500)
+    } else {
+        Vec::new()
+    };
+
+    let mut candidates: Vec<VideoCandidate> = if !found_paths.is_empty() {
         found_paths
             .par_iter()
             .map(|p| score_media_candidate(&root_path, Path::new(p), &terms))

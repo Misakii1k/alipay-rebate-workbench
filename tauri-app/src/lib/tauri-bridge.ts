@@ -49,15 +49,30 @@ export function isTauri(): boolean {
 
 let latestDragDrop: { paths: string[]; x: number; y: number; at: number } | null = null;
 
+/** 自定义拖放事件名：绕开 WebView2 拦截原生拖放、DOM onDrop 拿不到文件的问题。 */
+export const TAURI_FILE_DROP_EVENT = "tauri-files-drop";
+
 if (typeof window !== "undefined" && isTauri()) {
   getCurrentWebview().onDragDropEvent((event: { payload: DragDropEvent }) => {
     if (event.payload.type === "drop") {
-      latestDragDrop = {
-        paths: event.payload.paths,
-        x: event.payload.position.x,
-        y: event.payload.position.y,
-        at: Date.now()
-      };
+      const paths = event.payload.paths ?? [];
+      // Tauri 给的是物理像素坐标；Windows 缩放(125%/150%)下需除以 devicePixelRatio
+      // 换算成 CSS 像素，否则 elementFromPoint / getBoundingClientRect 命中判断会错位。
+      const ratio = window.devicePixelRatio || 1;
+      const cssX = event.payload.position.x / ratio;
+      const cssY = event.payload.position.y / ratio;
+      latestDragDrop = { paths, x: cssX, y: cssY, at: Date.now() };
+
+      // 命中拖放位置下的元素并派发冒泡自定义事件，让对应放置区接收文件路径。
+      // 这是 Tauri 下拖放导入的主路径（DOM 原生 drop 在 WebView2 里通常不带文件）。
+      if (paths.length > 0) {
+        const target = document.elementFromPoint(cssX, cssY);
+        if (target) {
+          target.dispatchEvent(
+            new CustomEvent(TAURI_FILE_DROP_EVENT, { bubbles: true, detail: { paths } })
+          );
+        }
+      }
     }
   }).catch(() => undefined);
 }

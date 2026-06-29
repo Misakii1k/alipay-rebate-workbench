@@ -1,7 +1,7 @@
 {
   "name": "ecommerce-ops-toolbox",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.7",
   "type": "module",
   "description": "电商运营工具箱桌面客户端（Tauri 版）",
   "scripts": {

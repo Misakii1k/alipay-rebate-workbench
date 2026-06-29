@@ -59,9 +59,10 @@ import {
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "compare" | "settings";
 
-const APP_VERSION = "1.0.6";
+const APP_VERSION = "1.0.7";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "1.0.7 修复视频剪辑两个常用功能：现在可以把视频/图片直接拖进上传框导入了（之前拖进去没反应）；「智能选择」在 Everything 没开时会自动改用全目录扫描，不再动不动就提示找不到素材。",
   "1.0.6 修了几个实际用起来的毛病：升级后设置不会再丢了，API 配置和文件夹路径重启后还在；用搜索找文件时不再闪黑框，中文关键词也能正常搜到了；视频剪辑用显卡失败时会自动改用 CPU 接着剪，不再卡住。",
   "1.0.4 识别成功提示条动画改为从左侧滑入，更顺滑。",
   "1.0.3 识别成功提示条位置调整：从右侧「识别结果」框移到左侧「当前用户」框顶部，更醒目。",

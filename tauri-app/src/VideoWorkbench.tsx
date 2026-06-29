@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, FileAudio, FolderOpen, ImagePlus, Loader2, List, Play, Plus, Search, Scissors, Stethoscope, Table2, Trash2, Video, X, Zap } from "lucide-react";
 import clsx from "clsx";
-import { alipayWorkbench, isTauri } from "@/lib/tauri-bridge";
+import { alipayWorkbench, isTauri, TAURI_FILE_DROP_EVENT } from "@/lib/tauri-bridge";
 import type { AppSettings, FfmpegStatus, VideoCandidate, VideoRenderProgress, VideoRenderResult, VideoTask, VideoTemplateId } from "./lib/shared";
 import { autoFillSliceImages, createVideoTask, isTaskReady, normalizeVideoTask, updateTaskName } from "./lib/video";
 
@@ -642,6 +642,30 @@ function PathBadge({ label, value, onPick }: { label: string; value: string; onP
   );
 }
 
+/**
+ * 监听 Tauri 原生拖放派发的自定义事件，把文件路径回调给放置区。
+ * 用 ref 持有最新回调，避免内联函数每次渲染重复绑定/解绑监听器。
+ */
+function useTauriFileDrop<T extends HTMLElement>(onPaths: (paths: string[]) => void) {
+  const ref = useRef<T>(null);
+  const cbRef = useRef(onPaths);
+  cbRef.current = onPaths;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ paths: string[] }>).detail;
+      if (detail?.paths?.length) {
+        event.stopPropagation();
+        cbRef.current(detail.paths);
+      }
+    };
+    el.addEventListener(TAURI_FILE_DROP_EVENT, handler as EventListener);
+    return () => el.removeEventListener(TAURI_FILE_DROP_EVENT, handler as EventListener);
+  }, []);
+  return ref;
+}
+
 function UploadBox({
   title,
   icon,
@@ -655,8 +679,10 @@ function UploadBox({
   onDropFiles: (paths: string[]) => void;
   children: React.ReactNode;
 }) {
+  const dropRef = useTauriFileDrop<HTMLDivElement>(onDropFiles);
   return (
     <div
+      ref={dropRef}
       role="button"
       tabIndex={0}
       className="upload-box"
@@ -674,10 +700,11 @@ function UploadBox({
       onDrop={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        const paths = alipayWorkbench.consumeRecentDropPaths?.(event.currentTarget.getBoundingClientRect()) ?? Array.from(event.dataTransfer.files)
+        // 浏览器预览模式回退：Tauri 模式下文件由原生拖放自定义事件处理。
+        const paths = Array.from(event.dataTransfer.files)
           .map((file) => alipayWorkbench.getPathForFile(file))
           .filter(Boolean);
-        onDropFiles(paths);
+        if (paths.length) onDropFiles(paths);
       }}
     >
       {icon === "image" ? <ImagePlus size={34} /> : <Video size={34} />}
@@ -701,30 +728,50 @@ function SliceImageGrid({ task, activeSlot, onSlotClick, onSlotDrop, onSlotRemov
 }) {
   return (
     <div className="slice-grid">
-      {Array.from({ length: 5 }).map((_, index) => {
-        const filled = Boolean(task.imagePaths[index]);
-        return (
-          <div
-            key={index}
-            className={clsx("slice-slot", filled && "filled", index === activeSlot && "active")}
-            onClick={() => onSlotClick(index)}
-            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
-            onDrop={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const paths = alipayWorkbench.consumeRecentDropPaths?.(e.currentTarget.getBoundingClientRect()) ?? Array.from(e.dataTransfer.files).map((f) => alipayWorkbench.getPathForFile(f)).filter(Boolean);
-              onSlotDrop(index, paths);
-            }}
-          >
-            <span>{index + 1}</span>
-            {filled && (
-              <button className="slice-slot-delete" onClick={(e) => { e.stopPropagation(); onSlotRemove(index); }} title="删除这个图片槽位">
-                <Trash2 size={11} />
-              </button>
-            )}
-          </div>
-        );
-      })}
+      {Array.from({ length: 5 }).map((_, index) => (
+        <SliceSlot
+          key={index}
+          index={index}
+          filled={Boolean(task.imagePaths[index])}
+          active={index === activeSlot}
+          onSlotClick={onSlotClick}
+          onSlotDrop={onSlotDrop}
+          onSlotRemove={onSlotRemove}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SliceSlot({ index, filled, active, onSlotClick, onSlotDrop, onSlotRemove }: {
+  index: number;
+  filled: boolean;
+  active: boolean;
+  onSlotClick: (slot: number) => void;
+  onSlotDrop: (slot: number, paths: string[]) => void;
+  onSlotRemove: (slot: number) => void;
+}) {
+  const dropRef = useTauriFileDrop<HTMLDivElement>((paths) => onSlotDrop(index, paths));
+  return (
+    <div
+      ref={dropRef}
+      className={clsx("slice-slot", filled && "filled", active && "active")}
+      onClick={() => onSlotClick(index)}
+      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // 浏览器预览模式回退；Tauri 模式下由原生拖放自定义事件处理。
+        const paths = Array.from(e.dataTransfer.files).map((f) => alipayWorkbench.getPathForFile(f)).filter(Boolean);
+        if (paths.length) onSlotDrop(index, paths);
+      }}
+    >
+      <span>{index + 1}</span>
+      {filled && (
+        <button className="slice-slot-delete" onClick={(e) => { e.stopPropagation(); onSlotRemove(index); }} title="删除这个图片槽位">
+          <Trash2 size={11} />
+        </button>
+      )}
     </div>
   );
 }
