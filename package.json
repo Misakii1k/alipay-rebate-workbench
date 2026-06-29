@@ -1,6 +1,6 @@
 {
   "name": "alipay-rebate-workbench",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "description": "电商运营工具箱桌面客户端",
   "main": "dist-electron/electron/main.js",

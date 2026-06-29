@@ -173,7 +173,7 @@ pub async fn call_chat_completion(
                     return Ok(content.to_string());
                 } else {
                     let text = response.text().await.unwrap_or_default();
-                    last_error = format!("模型接口请求失败：{} {}", status, &text[..text.len().min(200)]);
+                    last_error = format!("模型接口请求失败：{} {}", status, text.chars().take(200).collect::<String>());
                     if should_retry(status) {
                         // 指数退避（简化：固定 500ms，重试次数由上层 call_chat_completion_with_retry 控制）
                         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -275,7 +275,7 @@ pub async fn ai_test_connection(settings: AppSettings) -> Result<ModelConnection
                 let text = response.text().await.unwrap_or_default();
                 Ok(ModelConnectionStatus {
                     state: "failed".to_string(),
-                    detail: format!("HTTP {}: {}", status, &text[..text.len().min(100)]),
+                    detail: format!("HTTP {}: {}", status, text.chars().take(100).collect::<String>()),
                 })
             }
         }

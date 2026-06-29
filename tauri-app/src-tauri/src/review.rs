@@ -658,7 +658,7 @@ pub async fn generate_review_copy(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
-        return Err(format!("AI 生成失败：{} {}", status, &text[..text.len().min(200)]));
+        return Err(format!("AI 生成失败：{} {}", status, text.chars().take(200).collect::<String>()));
     }
 
     let json: serde_json::Value = response
@@ -841,7 +841,7 @@ pub async fn chat_review_copy(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
-        return Err(format!("AI 对话失败：{} {}", status, &text[..text.len().min(200)]));
+        return Err(format!("AI 对话失败：{} {}", status, text.chars().take(200).collect::<String>()));
     }
 
     let json: serde_json::Value = response

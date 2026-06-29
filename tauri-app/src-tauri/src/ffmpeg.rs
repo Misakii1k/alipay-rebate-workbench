@@ -407,7 +407,7 @@ pub async fn diagnose_ffmpeg(settings: &AppSettings, app: &AppHandle) -> FfmpegD
     items.push(FfmpegDiagnosisItem {
         label: "FFmpeg 可执行".to_string(),
         passed: vcode == 0,
-        detail: if vcode == 0 { version_line } else { format!("执行失败：{}", &voutput[..voutput.len().min(200)]) },
+        detail: if vcode == 0 { version_line } else { format!("执行失败：{}", voutput.chars().take(200).collect::<String>()) },
     });
     if vcode != 0 {
         suggestions.push("FFmpeg 无法执行，请检查文件是否损坏或被安全软件拦截。".to_string());
@@ -445,7 +445,7 @@ pub async fn diagnose_ffmpeg(settings: &AppSettings, app: &AppHandle) -> FfmpegD
     items.push(FfmpegDiagnosisItem {
         label: "视频编码测试".to_string(),
         passed: tcode == 0,
-        detail: if tcode == 0 { "视频编码功能正常".to_string() } else { format!("测试失败：{}", &toutput[..toutput.len().min(100)]) },
+        detail: if tcode == 0 { "视频编码功能正常".to_string() } else { format!("测试失败：{}", toutput.chars().take(100).collect::<String>()) },
     });
     if tcode != 0 {
         suggestions.push("FFmpeg 视频编码测试失败，可能文件损坏，建议重新下载。".to_string());
@@ -460,7 +460,7 @@ pub async fn diagnose_ffmpeg(settings: &AppSettings, app: &AppHandle) -> FfmpegD
     items.push(FfmpegDiagnosisItem {
         label: "音频编码测试".to_string(),
         passed: acode == 0,
-        detail: if acode == 0 { "音频编码功能正常".to_string() } else { format!("测试失败：{}", &aoutput[..aoutput.len().min(100)]) },
+        detail: if acode == 0 { "音频编码功能正常".to_string() } else { format!("测试失败：{}", aoutput.chars().take(100).collect::<String>()) },
     });
     if acode != 0 {
         suggestions.push("FFmpeg 音频编码测试失败，AAC 编码器可能不可用。".to_string());
@@ -482,7 +482,7 @@ pub async fn diagnose_ffmpeg(settings: &AppSettings, app: &AppHandle) -> FfmpegD
     items.push(FfmpegDiagnosisItem {
         label: "滤镜拼接测试".to_string(),
         passed: ccode == 0,
-        detail: if ccode == 0 { "filter_complex + concat 正常".to_string() } else { format!("测试失败：{}", &coutput[..coutput.len().min(100)]) },
+        detail: if ccode == 0 { "filter_complex + concat 正常".to_string() } else { format!("测试失败：{}", coutput.chars().take(100).collect::<String>()) },
     });
     if ccode != 0 {
         suggestions.push("视频拼接滤镜测试失败，FFmpeg 可能版本过低或编译缺少 filter 支持。".to_string());
