@@ -869,6 +869,36 @@ fn build_bos_template_args(
     Ok(args)
 }
 
+/// 解析预设音乐 id 为实际 mp3 路径（对应 electron `resolveMusicPresetPath`）。
+/// 预设音乐随包放在 resources/assets/music/{id}.mp3，找不到返回空串。
+fn resolve_music_preset_path(app: &AppHandle, id: &str) -> String {
+    if id.is_empty() || id == "custom" {
+        return String::new();
+    }
+    let candidate = crate::paths::get_resources_dir(app)
+        .join("assets")
+        .join("music")
+        .join(format!("{}.mp3", id));
+    if candidate.exists() {
+        candidate.to_string_lossy().to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// 解析任务最终使用的音乐路径：自定义文件优先，否则按预设 id 解析（对齐 electron）。
+fn resolve_task_music_path(app: &AppHandle, task: &VideoTask, settings: &AppSettings) -> String {
+    let custom = task.music_path.clone().unwrap_or_default();
+    if !custom.is_empty() {
+        return custom;
+    }
+    let preset_id = {
+        let tid = task.music_preset_id.clone().unwrap_or_default();
+        if tid.is_empty() { settings.slice_music_preset_id.clone() } else { tid }
+    };
+    resolve_music_preset_path(app, &preset_id)
+}
+
 /// 构建视频切片模板参数（对应原 `buildVideoSliceArgs`）。
 ///
 /// 模板：5 张图片，带过渡效果（hblur、zoomin、slide、grid）。
@@ -878,6 +908,7 @@ fn build_video_slice_args(
     settings: &AppSettings,
     output_path: &str,
     gpu_encoders: &[String],
+    app: &AppHandle,
 ) -> Result<Vec<String>, String> {
     let task = &payload.task;
     let images: Vec<String> = task.image_paths.iter().filter(|p| !p.is_empty()).take(5).cloned().collect();
@@ -893,12 +924,9 @@ fn build_video_slice_args(
     let stable_durations = ["2.9", "2.7", "2.7", "2.7", "2.77"];
     let transition_durations = ["0.3", "0.3", "0.3", "0.4"];
 
-    let music_path = task.music_path.clone().unwrap_or_default();
-    let music_path = if music_path.is_empty() {
-        task.music_preset_id.clone().unwrap_or_default()
-    } else {
-        music_path
-    };
+    // 解析音乐：自定义文件优先，否则按预设 id 映射到随包 mp3（之前直接把预设 id
+    // 当成 -i 输入路径，ffmpeg 打不开导致切片预设音乐失效）。
+    let music_path = resolve_task_music_path(app, task, settings);
 
     let mut args: Vec<String> = vec_into_strings(&["-y", "-hide_banner"]);
     for image in &images {
@@ -1146,7 +1174,7 @@ pub async fn render_video_task(
 
     // 构建参数
     let args_result = if task.template == "video-slice" {
-        build_video_slice_args(&ffmpeg_path, &payload, &settings, &output_path, &gpu_encoders)
+        build_video_slice_args(&ffmpeg_path, &payload, &settings, &output_path, &gpu_encoders, app)
     } else {
         build_bos_template_args(&ffmpeg_path, &payload, &settings, &output_path, &gpu_encoders, has_hwaccel)
     };
@@ -1221,7 +1249,7 @@ pub async fn render_video_task(
         };
         let cpu_payload = VideoRenderPayload { task: task.clone(), settings: cpu_settings.clone() };
         let cpu_args_result = if task.template == "video-slice" {
-            build_video_slice_args(&ffmpeg_path, &cpu_payload, &cpu_settings, &output_path, &gpu_encoders)
+            build_video_slice_args(&ffmpeg_path, &cpu_payload, &cpu_settings, &output_path, &gpu_encoders, app)
         } else {
             // CPU 回退：传 has_hwaccel=false，去掉 `-hwaccel auto -hwaccel_output_format nv12`。
             // 否则若原始 GPU 失败正是硬件解码链路（驱动/像素格式不兼容）导致，
