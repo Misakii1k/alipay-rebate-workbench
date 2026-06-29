@@ -199,7 +199,7 @@ pub fn sanitize_cell_text(value: Option<&str>) -> Option<String> {
 
 /// Everything 查询消毒。
 ///
-/// - 仅保留字母、数字、空格、下划线、连字符
+/// - 仅保留字母（含中文等 Unicode 字母）、数字、空格、下划线、连字符
 /// - 折叠多个空格为一个
 /// - 去除首尾空格
 /// - 截断到 200 字符
@@ -207,7 +207,8 @@ pub fn sanitize_cell_text(value: Option<&str>) -> Option<String> {
 /// 对应原 `sanitizeEverythingQuery`。
 pub fn sanitize_everything_query(query: &str) -> String {
     // 使用 regex 替换非字母数字空格下划线连字符为空格
-    let re = Regex::new(r"[^\w\s\-]").unwrap();
+    // \p{L} 匹配任何字母（包括中文），\p{N} 匹配任何数字
+    let re = Regex::new(r"[^\p{L}\p{N}\s_\-]").unwrap();
     let replaced = re.replace_all(query, " ").to_string();
 
     // 折叠多个空白
@@ -434,5 +435,20 @@ mod tests {
     fn test_sanitize_everything_query_empty() {
         assert_eq!(sanitize_everything_query(""), "");
         assert_eq!(sanitize_everything_query("   "), "");
+    }
+
+    #[test]
+    fn test_sanitize_everything_query_keeps_chinese_chars() {
+        let q = sanitize_everything_query("红色产品 123");
+        assert_eq!(q, "红色产品 123");
+    }
+
+    #[test]
+    fn test_sanitize_everything_query_strips_special_but_keeps_chinese() {
+        let q = sanitize_everything_query("产品; rm -rf /");
+        assert!(q.contains("产品"));
+        assert!(!q.contains(";"));
+        assert!(!q.contains("/"));
+        // 字母 rm 会被保留，但 ; 和 / 会被替换为空格
     }
 }

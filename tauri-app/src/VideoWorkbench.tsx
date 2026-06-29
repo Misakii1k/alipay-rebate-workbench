@@ -674,7 +674,7 @@ function UploadBox({
       onDrop={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        const paths = Array.from(event.dataTransfer.files)
+        const paths = alipayWorkbench.consumeRecentDropPaths?.(event.currentTarget.getBoundingClientRect()) ?? Array.from(event.dataTransfer.files)
           .map((file) => alipayWorkbench.getPathForFile(file))
           .filter(Boolean);
         onDropFiles(paths);
@@ -712,7 +712,7 @@ function SliceImageGrid({ task, activeSlot, onSlotClick, onSlotDrop, onSlotRemov
             onDrop={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              const paths = Array.from(e.dataTransfer.files).map((f) => alipayWorkbench.getPathForFile(f)).filter(Boolean);
+              const paths = alipayWorkbench.consumeRecentDropPaths?.(e.currentTarget.getBoundingClientRect()) ?? Array.from(e.dataTransfer.files).map((f) => alipayWorkbench.getPathForFile(f)).filter(Boolean);
               onSlotDrop(index, paths);
             }}
           >

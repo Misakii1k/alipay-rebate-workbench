@@ -13,6 +13,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { check as checkUpdate } from "@tauri-apps/plugin-updater";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 import type {
   AppSettings,
   ClipboardSnapshot,
@@ -46,6 +47,21 @@ export function isTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
 
+let latestDragDrop: { paths: string[]; x: number; y: number; at: number } | null = null;
+
+if (typeof window !== "undefined" && isTauri()) {
+  getCurrentWebview().onDragDropEvent((event: { payload: DragDropEvent }) => {
+    if (event.payload.type === "drop") {
+      latestDragDrop = {
+        paths: event.payload.paths,
+        x: event.payload.position.x,
+        y: event.payload.position.y,
+        at: Date.now()
+      };
+    }
+  }).catch(() => undefined);
+}
+
 /** 把 File 对象（来自 input/drag）转换为本地路径。Tauri 环境下走 invoke；浏览器回退 file.path。 */
 async function resolveFilePath(file: File): Promise<string> {
   if (isTauri()) {
@@ -58,6 +74,17 @@ async function resolveFilePath(file: File): Promise<string> {
     }
   }
   return (file as File & { path?: string }).path || "";
+}
+
+function consumeRecentDropPaths(rect?: DOMRect | null): string[] {
+  const drop = latestDragDrop;
+  if (!drop || Date.now() - drop.at > 1500) return [];
+  if (rect) {
+    const inside = drop.x >= rect.left && drop.x <= rect.right && drop.y >= rect.top && drop.y <= rect.bottom;
+    if (!inside) return [];
+  }
+  latestDragDrop = null;
+  return drop.paths;
 }
 
 /** 根据文件选择 kind 构造 Tauri dialog 过滤器。 */
@@ -131,6 +158,7 @@ export const alipayWorkbench = {
     return (file as File & { path?: string }).path || "";
   },
   getPathForFileAsync: (file: File): Promise<string> => resolveFilePath(file),
+  consumeRecentDropPaths: (rect?: DOMRect | null): string[] => consumeRecentDropPaths(rect),
   selectDirectory: async (title: string, _kind?: DirectoryCapabilityKind): Promise<SelectPathResult> => {
     if (isTauri()) {
       const result = await openDialog({ directory: true, title });

@@ -54,6 +54,8 @@ export interface AppSettings {
   videoTemplate: VideoTemplateId;
   videoOutputSize: VideoOutputSize;
   videoQualityMode: VideoQualityMode;
+  /** 视频编码器选择：auto(GPU优先) / gpu(强制GPU) / cpu(强制CPU) */
+  videoEncoderMode: "auto" | "gpu" | "cpu";
   updateFeedUrl: string;
   reviewRootDir: string;
   reviewProfessionalLevel: number;
@@ -345,6 +347,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   videoTemplate: "bos-template",
   videoOutputSize: "auto",
   videoQualityMode: "preserve",
+  videoEncoderMode: "auto",
   updateFeedUrl: "",
   reviewRootDir: "",
   reviewProfessionalLevel: 2,
@@ -459,6 +462,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     videoTemplate: normalizeVideoTemplate(raw.videoTemplate),
     videoOutputSize: normalizeVideoOutputSize(raw.videoOutputSize),
     videoQualityMode: normalizeVideoQualityMode(raw.videoQualityMode),
+    videoEncoderMode: normalizeVideoEncoderMode(raw.videoEncoderMode),
     updateFeedUrl: String(raw.updateFeedUrl ?? ""),
     reviewRootDir: String(raw.reviewRootDir ?? ""),
     reviewProfessionalLevel: clampNumber(raw.reviewProfessionalLevel, 0, 5, DEFAULT_SETTINGS.reviewProfessionalLevel),
@@ -522,6 +526,10 @@ function normalizeVideoOutputSize(value: unknown): VideoOutputSize {
 
 function normalizeVideoQualityMode(value: unknown): VideoQualityMode {
   return value === "high" || value === "balanced" ? value : "preserve";
+}
+
+function normalizeVideoEncoderMode(value: unknown): "auto" | "gpu" | "cpu" {
+  return value === "gpu" || value === "cpu" ? value : "auto";
 }
 
 function normalizeFontScale(value: unknown): FontScale {

@@ -44,6 +44,11 @@ impl Default for ApiProfile {
 // 应用设置
 // ============================================================================
 
+/// `video_encoder_mode` 的 serde 默认值（旧配置缺字段时回退 auto）。
+fn default_video_encoder_mode() -> String {
+    "auto".to_string()
+}
+
 /// 应用设置（对应前端 AppSettings）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +83,10 @@ pub struct AppSettings {
     pub video_template: String,
     pub video_output_size: String,
     pub video_quality_mode: String,
+    /// 视频编码器选择：auto(默认,GPU优先) / gpu(强制GPU) / cpu(强制CPU)
+    /// 加 serde(default)：旧 settings.json 无此字段时回退默认，避免整份设置反序列化失败。
+    #[serde(default = "default_video_encoder_mode")]
+    pub video_encoder_mode: String,
     pub update_feed_url: String,
     pub review_root_dir: String,
     pub review_professional_level: i32,
@@ -142,6 +151,7 @@ impl Default for AppSettings {
             video_template: "bos-template".to_string(),
             video_output_size: "auto".to_string(),
             video_quality_mode: "preserve".to_string(),
+            video_encoder_mode: "auto".to_string(),
             update_feed_url: String::new(),
             review_root_dir: String::new(),
             review_professional_level: 2,
@@ -404,13 +414,12 @@ pub struct FileDialogFilter {
 // Everything 搜索
 // ============================================================================
 
-/// Everything 状态。
+/// Everything 状态（对齐 electron 基线：`{ available, detail }`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EverythingStatus {
     pub available: bool,
-    pub version: String,
-    pub path: String,
+    pub detail: String,
 }
 
 // ============================================================================
@@ -967,6 +976,7 @@ mod tests {
             "videoTemplate": "bos-template",
             "videoOutputSize": "auto",
             "videoQualityMode": "preserve",
+            "videoEncoderMode": "auto",
             "updateFeedUrl": "",
             "reviewRootDir": "",
             "reviewProfessionalLevel": 0,

@@ -57,6 +57,7 @@ if (isTauri()) {
     selectFiles: async () => ({ canceled: true, paths: [] }),
     getPathForFile: (file) => (file as File & { path?: string }).path || "",
     getPathForFileAsync: async (file) => (file as File & { path?: string }).path || "",
+    consumeRecentDropPaths: () => [],
     selectDirectory: async () => ({ canceled: true, paths: [] }),
     getFfmpegStatus: async () => ({ available: false, path: "", detail: "浏览器预览模式无法检测内置 FFmpeg，请使用桌面端。", acceleration: "浏览器预览不可用" }),
     diagnoseFfmpeg: async () => ({ items: [], suggestions: ["浏览器预览模式不支持诊断，请使用桌面端。"], ok: false }),

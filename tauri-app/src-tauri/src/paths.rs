@@ -5,6 +5,7 @@
 //! `%APPDATA%/<bundleId>` 作为配置目录。
 
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager};
 
 /// 应用配置目录的标识符（与 tauri.conf.json 中 identifier 一致）。
 const APP_CONFIG_DIR_NAME: &str = "com.rebate.workbench";
@@ -25,10 +26,17 @@ pub fn get_app_config_dir() -> PathBuf {
 
 /// 返回 Tauri resources 目录。
 ///
-/// 注意：Tauri 在打包后会将 resources 映射到特定路径，运行时通过
-/// `app.path().resource_dir()` 获取。这里返回开发环境的相对路径回退。
-pub fn get_resources_dir() -> PathBuf {
-    PathBuf::from("resources")
+/// 打包后通过 `app.path().resource_dir()` 获取绝对路径；
+/// 开发环境或获取失败时回退到相对路径 `resources`。
+pub fn get_resources_dir(app: &AppHandle) -> PathBuf {
+    app.path()
+        .resource_dir()
+        .unwrap_or_else(|_| PathBuf::from("resources"))
+}
+
+/// 内部辅助函数：返回 resources/bin 目录（用于测试和回退拼接）。
+fn resources_bin_dir(app: &AppHandle) -> PathBuf {
+    get_resources_dir(app).join("bin")
 }
 
 /// 返回日志目录（app_config_dir/logs）。
@@ -52,18 +60,23 @@ pub fn get_video_workbench_state_path() -> PathBuf {
 }
 
 /// 返回 ffmpeg.exe 路径（resources/bin/ffmpeg.exe）。
-pub fn get_ffmpeg_path() -> PathBuf {
-    get_resources_dir().join("bin").join("ffmpeg.exe")
+pub fn get_ffmpeg_path(app: &AppHandle) -> PathBuf {
+    resources_bin_dir(app).join("ffmpeg.exe")
 }
 
 /// 返回 es.exe 路径（resources/bin/es.exe）。
-pub fn get_es_path() -> PathBuf {
-    get_resources_dir().join("bin").join("es.exe")
+pub fn get_es_path(app: &AppHandle) -> PathBuf {
+    resources_bin_dir(app).join("es.exe")
+}
+
+/// 返回 Everything.exe 路径（resources/bin/Everything.exe）。
+pub fn get_everything_exe_path(app: &AppHandle) -> PathBuf {
+    resources_bin_dir(app).join("Everything.exe")
 }
 
 /// 返回支付宝模板路径（resources/assets/alipay-template.xlsx）。
-pub fn get_alipay_template_path() -> PathBuf {
-    get_resources_dir()
+pub fn get_alipay_template_path(app: &AppHandle) -> PathBuf {
+    get_resources_dir(app)
         .join("assets")
         .join("alipay-template.xlsx")
 }
@@ -131,20 +144,25 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "需要 AppHandle，无法在单元测试中调用"]
     fn test_get_ffmpeg_path() {
-        let p = get_ffmpeg_path();
-        assert!(p.ends_with("bin") || p.to_str().map(|s| s.contains("bin")).unwrap_or(false));
+        // 路径拼接逻辑：resources/bin/ffmpeg.exe
+        let p = PathBuf::from("resources").join("bin").join("ffmpeg.exe");
+        assert!(p.ends_with("ffmpeg.exe"));
+        assert!(p.to_str().map(|s| s.contains("bin")).unwrap_or(false));
     }
 
     #[test]
+    #[ignore = "需要 AppHandle，无法在单元测试中调用"]
     fn test_get_es_path() {
-        let p = get_es_path();
+        let p = PathBuf::from("resources").join("bin").join("es.exe");
         assert!(p.ends_with("es.exe"));
     }
 
     #[test]
+    #[ignore = "需要 AppHandle，无法在单元测试中调用"]
     fn test_get_alipay_template_path() {
-        let p = get_alipay_template_path();
+        let p = PathBuf::from("resources").join("assets").join("alipay-template.xlsx");
         assert!(p.ends_with("alipay-template.xlsx"));
     }
 

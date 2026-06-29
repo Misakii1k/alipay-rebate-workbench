@@ -11,7 +11,25 @@ use crate::security::{is_path_inside_root, sanitize_everything_query};
 use crate::types::{AppSettings, EverythingStatus};
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Windows：避免子进程弹出/闪烁控制台窗口。
+/// es.exe 是控制台程序，Tauri 是纯 GUI 进程，调用时若不加该标志会闪黑窗。
+/// spec「revert-to-classic-everything-search」明确要求保留 CREATE_NO_WINDOW。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn no_window(cmd: &mut Command) -> &mut Command {
+    cmd.creation_flags(CREATE_NO_WINDOW)
+}
+
+#[cfg(not(windows))]
+fn no_window(cmd: &mut Command) -> &mut Command {
+    cmd
+}
 
 /// 候选 es.exe 路径列表（已知安装位置）。
 fn known_everything_candidates() -> Vec<String> {
@@ -80,6 +98,10 @@ pub fn search_with_everything(
     let ext_arg = ext_list.join(";");
 
     let mut args: Vec<String> = Vec::new();
+    // -utf8：强制 es.exe 以 UTF-8 输出，否则中文 Windows 下默认按系统码页(GBK)输出，
+    // 中文路径会被 from_utf8_lossy 解析成替换字符，随后因「路径不存在」被过滤掉，
+    // 导致中文关键词搜索结果为空。这是中文搜索可用性的关键。
+    args.push("-utf8".to_string());
     args.push("-n".to_string());
     args.push(max_results.to_string());
     if !root.is_empty() {
@@ -98,9 +120,10 @@ pub fn search_with_everything(
         }
     }
 
-    let output = Command::new(es_path)
-        .args(&args)
-        .output();
+    let mut command = Command::new(es_path);
+    command.args(&args);
+    no_window(&mut command);
+    let output = command.output();
 
     let output = match output {
         Ok(o) => o,
@@ -145,7 +168,10 @@ pub fn search_with_everything(
 
 /// 测试 Everything 是否可用（对应 `everything:test` IPC 通道）。
 ///
-/// 简化实现：检查 es.exe 是否能执行（不实际搜索）。
+/// 对齐 electron 基线与 spec「revert-to-classic-everything-search」：
+/// - 解析 es.exe 路径，找不到则返回友好提示。
+/// - 用一个简单 test 查询执行 `search_with_everything`，能正常执行即视为可用。
+/// - 不自动拉起 Everything 服务，不弹出任何窗口。
 #[tauri::command]
 pub async fn everything_test(settings: AppSettings) -> Result<EverythingStatus, String> {
     let es_path = resolve_everything_es_path(&settings);
@@ -153,39 +179,40 @@ pub async fn everything_test(settings: AppSettings) -> Result<EverythingStatus, 
     if es_path.is_empty() {
         return Ok(EverythingStatus {
             available: false,
-            version: String::new(),
-            path: String::new(),
+            detail: "未找到 es.exe，请确认 Everything 已安装并在后台运行。".to_string(),
         });
     }
 
-    // 尝试执行 es.exe 获取版本号（-version 参数）
-    let output = Command::new(&es_path)
-        .arg("-version")
-        .output();
-
-    let (available, version) = match output {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
-            let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
-
-            // es.exe 没有标准的 -version 输出，简单检查是否能执行
-            // 如果返回码为 0 或 1（参数错误也算可执行），认为可用
-            let version_str = combined
-                .lines()
-                .find(|line| line.to_lowercase().contains("everything"))
-                .unwrap_or("Everything")
-                .to_string();
-            (true, version_str)
-        }
-        Err(_) => (false, String::new()),
-    };
-
-    Ok(EverythingStatus {
-        available,
-        version,
-        path: es_path,
+    // 在阻塞线程中执行一次轻量探测搜索（es.exe 是同步子进程）。
+    let probe_path = es_path.clone();
+    let executed = tokio::task::spawn_blocking(move || {
+        run_es_probe(&probe_path)
     })
+    .await
+    .unwrap_or(false);
+
+    if executed {
+        Ok(EverythingStatus {
+            available: true,
+            detail: "Everything 已就绪，搜索可用。".to_string(),
+        })
+    } else {
+        Ok(EverythingStatus {
+            available: false,
+            detail: "es.exe 已找到但执行失败，请确认 Everything 主程序正在后台运行。".to_string(),
+        })
+    }
+}
+
+/// 执行一次最小化的 es.exe 探测（`-utf8 -n 1 test`），能成功执行返回 true。
+fn run_es_probe(es_path: &str) -> bool {
+    let mut command = Command::new(es_path);
+    command.args(["-utf8", "-n", "1", "test"]);
+    no_window(&mut command);
+    match command.output() {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    }
 }
 
 // ============================================================================

@@ -59,9 +59,10 @@ import {
 
 type ViewKey = "home" | RebateViewKey | "video" | "review" | "compare" | "settings";
 
-const APP_VERSION = "1.0.4";
+const APP_VERSION = "1.0.6";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
+  "1.0.6 修了几个实际用起来的毛病：升级后设置不会再丢了，API 配置和文件夹路径重启后还在；用搜索找文件时不再闪黑框，中文关键词也能正常搜到了；视频剪辑用显卡失败时会自动改用 CPU 接着剪，不再卡住。",
   "1.0.4 识别成功提示条动画改为从左侧滑入，更顺滑。",
   "1.0.3 识别成功提示条位置调整：从右侧「识别结果」框移到左侧「当前用户」框顶部，更醒目。",
   "1.0.2 识别成功时金额方块会闪一下高亮提示，tb 名更清晰展示在卡片内。",
@@ -235,6 +236,7 @@ export default function App() {
   const skipAutoRecognizeRef = useRef(false);
   const recognizeAbortRef = useRef<AbortController | null>(null);
   const completionNotifiedRef = useRef(false);
+  const autoTestTriggeredRef = useRef(false);
   const marqueeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -303,6 +305,18 @@ export default function App() {
       const normalized = normalizeSettings(loaded);
       setSettings(normalized);
       setSettingsLoaded(true);
+      // 启动时自动测试大模型连接
+      if (autoTestTriggeredRef.current) return;
+      autoTestTriggeredRef.current = true;
+      const activeProfile = getActiveApiProfile(normalized);
+      if (normalized.aiEnabled && activeProfile.apiKey) {
+        setModelStatus({ state: "testing", detail: "启动时自动测试中…" });
+        alipayWorkbench.testModelConnection(normalized)
+          .then(setModelStatus)
+          .catch(() => setModelStatus({ state: "failed", detail: "启动测试失败" }));
+      } else {
+        setModelStatus({ state: "unknown", detail: "未配置 API Key，请在设置中填写" });
+      }
     });
     alipayWorkbench.loadWorkbenchState().then((state) => {
       setAmountInput(state.amountInput);
@@ -984,7 +998,7 @@ function ToolboxHome({ settings, pendingCount, totalAmount, onOpen }: { settings
     <section className="home-dashboard">
       <div className="home-hero">
         <div className="home-hero-bg" aria-hidden="true" />
-        <div className="home-hero-content"><p className="eyebrow">E-COMMERCE OPS</p><h1>{settings.toolboxName}</h1><p>把返款、视频、收评、标题优化和核对放在同一个工作台。</p></div>
+        <div className="home-hero-content"><p className="eyebrow">E-COMMERCE OPS</p><h1>{settings.toolboxName}</h1><p>把返款、视频、收评和核对放在同一个工作台。</p></div>
         <div className="home-metrics"><span className="metric-green"><strong>{formatMoney(totalAmount)}</strong>今日返款总金额</span><span className="metric-gold"><strong>{pendingCount}</strong>待处理笔数</span></div>
       </div>
       <div className="bento-grid">
@@ -1436,7 +1450,7 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
         <label><span>已学习识别规则</span><textarea value={draft.learningPromptNotes} onChange={(event) => set("learningPromptNotes", event.target.value)} placeholder="用户采纳或手动修正后，大模型总结的可复用识别规则会保存在这里。" /></label>
         <button className="secondary-action light" onClick={() => set("learningPromptNotes", "")} title="清空已经学习到的识别纠偏规则">清空学习规则</button>
       </div></Panel></section>}
-      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-1440">1440 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
+      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-1440">1440 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><label><span>视频编码器</span><select value={draft.videoEncoderMode} onChange={(event) => set("videoEncoderMode", event.target.value as AppSettings["videoEncoderMode"])} title="选择视频编码器：自动按 GPU 优先，强制 GPU 使用硬件编码器，强制 CPU 使用软件编码"><option value="auto">自动（GPU 优先）</option><option value="gpu">强制 GPU</option><option value="cpu">强制 CPU</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
       {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><div className="hint-card">自动更新暂未启用；发布源和签名策略确认后再开放。</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><span className="settings-autosave-hint">{lastSaved ? `已自动保存 ${new Date(lastSaved).toLocaleTimeString()}` : ""}</span></div>
