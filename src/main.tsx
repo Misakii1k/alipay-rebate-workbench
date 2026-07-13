@@ -58,6 +58,8 @@ if (!window.alipayWorkbench) {
     onVideoRenderProgress: () => () => undefined,
     getLatestImageInDirectory: async () => "",
     getImagePreview: async () => "",
+    processImages: async () => [],
+    generateImages: async () => [],
     scanReviewAssets: async () => [],
     loadReviewThumbnails: async () => ({}),
     loadReviewThumbnailBatch: async () => ({}),

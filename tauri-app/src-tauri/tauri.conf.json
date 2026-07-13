@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "电商运营工具箱",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "identifier": "com.rebate.workbench",
   "build": {
     "frontendDist": "../dist-renderer",
     "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run clean:bundle-resources && npm run build"
   },
   "app": {
     "windows": [
@@ -28,21 +28,26 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico"],
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
     "resources": {
       "../resources/assets/*": "assets/",
-      "../resources/assets/music/*": "assets/music/",
       "../resources/bin/*": "bin/"
     },
     "publisher": "rebate",
     "category": "Utility",
     "shortDescription": "电商运营工具箱",
-    "longDescription": "电商运营工具箱桌面客户端，含支付宝返款、视频剪辑、收评助手、评价对比 4 个模块",
+    "longDescription": "电商运营工具箱桌面客户端，包含支付宝返款、视频剪辑、收评助手、评价对比和生图工作台。",
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["SimpChinese"],
+        "languages": [
+          "SimpChinese"
+        ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico"
       },

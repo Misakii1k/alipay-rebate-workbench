@@ -10,6 +10,7 @@ import {
   EyeOff,
   Film,
   FileSpreadsheet,
+  ImagePlus,
   KeyRound,
   PanelLeftClose,
   PanelLeftOpen,
@@ -31,6 +32,7 @@ import clsx from "clsx";
 
 // 懒加载大型组件以优化初始加载性能
 const CompareWorkbench = lazy(() => import("./CompareWorkbench").then(m => ({ default: m.CompareWorkbench })));
+const ImageWorkbench = lazy(() => import("./ImageWorkbench").then(m => ({ default: m.ImageWorkbench })));
 const ReviewAssistant = lazy(() => import("./ReviewAssistant").then(m => ({ default: m.ReviewAssistant })));
 const VideoWorkbench = lazy(() => import("./VideoWorkbench").then(m => ({ default: m.VideoWorkbench })));
 
@@ -57,12 +59,12 @@ import {
   syncActiveApiProfile
 } from "./lib/shared";
 
-type ViewKey = "home" | RebateViewKey | "video" | "review" | "compare" | "settings";
+type ViewKey = "home" | RebateViewKey | "video" | "review" | "compare" | "image" | "settings";
 
-const APP_VERSION = "1.0.9";
+const APP_VERSION = "1.1.0";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
-  "1.0.9 修复视频切片的背景音乐：之前选了内置音乐（活力轻快/清新明亮等）却没声音，现在能正常合成进视频了；同时把 5 首内置音乐正确打进安装包。",
+  "1.0.9 修复视频切片与素材检索：支持自选背景音乐；智能选择会用更多关键词匹配相似素材，并过滤弱相关结果。",
   "1.0.8 稳定性加固：当 AI 接口或 FFmpeg 返回的报错信息里带中文时，程序不会再因为截断错误信息而崩溃，会正常弹出可读的提示。",
   "1.0.7 修复视频剪辑两个常用功能：现在可以把视频/图片直接拖进上传框导入了（之前拖进去没反应）；「智能选择」在 Everything 没开时会自动改用全目录扫描，不再动不动就提示找不到素材。",
   "1.0.6 修了几个实际用起来的毛病：升级后设置不会再丢了，API 配置和文件夹路径重启后还在；用搜索找文件时不再闪黑框，中文关键词也能正常搜到了；视频剪辑用显卡失败时会自动改用 CPU 接着剪，不再卡住。",
@@ -126,6 +128,7 @@ const toolNavItems: Array<{ key: "home" | ToolboxTool; label: string; desc: stri
   { key: "video", label: "视频批量剪辑", desc: "模板化短视频制作，智能匹配视频库素材，一键批量渲染", icon: Film },
   { key: "review", label: "收评助手", desc: "搜索本地参考图，AI 生成买家好评文案，支持多种评价风格", icon: MessageSquareText },
   { key: "compare", label: "评价返款对比", desc: "导入返款名单和实际评价，自动去重匹配，差异置顶标红", icon: Check },
+  { key: "image", label: "生图工作台", desc: "第三方 AI 生图、本地图片裁切、扩边和模板化批处理", icon: ImagePlus },
   { key: "settings", label: "设置", desc: "配置 API 密钥、文件路径、主题外观、快捷键等全局选项", icon: Settings }
 ];
 
@@ -772,8 +775,13 @@ export default function App() {
   async function copyRemark() {
     if (!currentRow) return;
     skipAutoRecognizeRef.current = true;
-    await alipayWorkbench.writeClipboardText(currentRow.remark);
-    showToast("备注已复制。");
+    try {
+      await alipayWorkbench.writeClipboardText(currentRow.remark);
+      showToast("淘宝名已复制。");
+    } catch (error) {
+      skipAutoRecognizeRef.current = false;
+      showToast(error instanceof Error ? `复制失败：${error.message}` : "复制失败。");
+    }
   }
 
   async function exportFile() {
@@ -955,6 +963,7 @@ export default function App() {
           {view === "video" && <VideoWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} onStateChange={setVideoState} showToast={showToast} />}
           {view === "review" && <ReviewAssistant settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} showToast={showToast} modelConnected={modelStatus.state === "connected"} />}
           {view === "compare" && <CompareWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} showToast={showToast} />}
+          {view === "image" && <ImageWorkbench />}
         </Suspense>
 
         {view === "settings" && <SettingsView settings={settings} onSave={saveSettings} modelStatus={modelStatus} onTestModel={async (draft) => {
@@ -1453,7 +1462,7 @@ function SettingsView({ settings, onSave, modelStatus, onTestModel }: { settings
         <label><span>已学习识别规则</span><textarea value={draft.learningPromptNotes} onChange={(event) => set("learningPromptNotes", event.target.value)} placeholder="用户采纳或手动修正后，大模型总结的可复用识别规则会保存在这里。" /></label>
         <button className="secondary-action light" onClick={() => set("learningPromptNotes", "")} title="清空已经学习到的识别纠偏规则">清空学习规则</button>
       </div></Panel></section>}
-      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-1440">1440 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><label><span>视频编码器</span><select value={draft.videoEncoderMode} onChange={(event) => set("videoEncoderMode", event.target.value as AppSettings["videoEncoderMode"])} title="选择视频编码器：自动按 GPU 优先，强制 GPU 使用硬件编码器，强制 CPU 使用软件编码"><option value="auto">自动（GPU 优先）</option><option value="gpu">强制 GPU</option><option value="cpu">强制 CPU</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐默认使用内置 CC0 音乐。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
+      {section === "video" && <section className="settings-grid single"><Panel title="视频批量剪辑设置" icon={Film}><div className="form-stack"><label><span>视频库文件夹</span><input value={draft.videoLibraryDir} onChange={(event) => set("videoLibraryDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoLibraryDir", "选择视频库文件夹")} title="选择视频库文件夹">选择视频库</button><label><span>输出文件夹</span><input value={draft.videoOutputDir} onChange={(event) => set("videoOutputDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("videoOutputDir", "选择输出文件夹")} title="选择视频输出目录">选择输出目录</button><label><span>FFmpeg 路径</span><input value={draft.ffmpegPath} onChange={(event) => set("ffmpegPath", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickFfmpeg()} title="选择 ffmpeg.exe 文件">指定 FFmpeg</button><label><span>默认视频尺寸</span><select value={draft.videoOutputSize} onChange={(event) => set("videoOutputSize", event.target.value as AppSettings["videoOutputSize"])}><option value="auto">自动保真（跟随原视频）</option><option value="portrait-1080">1080 × 1440</option><option value="portrait-1440">1440 × 1920</option></select></label><label><span>默认输出画质</span><select value={draft.videoQualityMode} onChange={(event) => set("videoQualityMode", event.target.value as AppSettings["videoQualityMode"])}><option value="preserve">保真优先</option><option value="high">高清优先</option><option value="balanced">标准</option></select></label><label><span>视频编码器</span><select value={draft.videoEncoderMode} onChange={(event) => set("videoEncoderMode", event.target.value as AppSettings["videoEncoderMode"])} title="选择视频编码器：自动按 GPU 优先，强制 GPU 使用硬件编码器，强制 CPU 使用软件编码"><option value="auto">自动（GPU 优先）</option><option value="gpu">强制 GPU</option><option value="cpu">强制 CPU</option></select></label><VideoScanModePicker value={draft.videoScanMode} onChange={(value) => setDraft((prev) => ({ ...prev, videoScanMode: value, videoSpeedMode: value === "speed" }))} /><div className="hint-card">切片音乐可选择本地音频文件；不选音乐会生成无音乐视频。自动模式会在低配设备上优先跳过候选缩略图；保真优先会尽量沿用原视频尺寸和帧率。</div></div></Panel></section>}
       {section === "review" && <section className="settings-grid single"><Panel title="收评助手设置" icon={MessageSquareText}><div className="form-stack"><label><span>收评助手 API 配置</span><select value={draft.reviewApiProfileId || ""} onChange={(event) => set("reviewApiProfileId", event.target.value)}><option value="">跟随全局激活配置</option>{draft.apiProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label><span>图片根目录</span><input value={draft.reviewRootDir} onChange={(event) => set("reviewRootDir", event.target.value)} /></label><button className="secondary-action light" onClick={() => void pickDirectory("reviewRootDir", "选择收评助手图片根目录")} title="选择收评助手图片根目录">选择图片根目录</button><label><span>默认工作模式</span><select value={draft.reviewWorkspaceMode} onChange={(event) => set("reviewWorkspaceMode", event.target.value as AppSettings["reviewWorkspaceMode"])}><option value="mixed">混合模式</option><option value="search">搜索模式</option><option value="ai">AI评价模式</option></select></label><label><span>AI评价目标字数：{draft.reviewTargetLength}</span><input type="range" min={30} max={100} step={5} value={draft.reviewTargetLength} onChange={(event) => set("reviewTargetLength", Number(event.target.value))} /></label><label><span>生成快捷键</span><input value={draft.reviewGenerateHotkey || "Ctrl+Enter"} onChange={(event) => set("reviewGenerateHotkey", event.target.value)} placeholder="Ctrl+Enter" /></label><label><span>思考模式 {!cap.supportsThinking && !cap.supportsReasoningEffort && <em style={{ color: "var(--text-dim)", fontSize: "var(--font-xs)" }}>（当前模型不支持）</em>}</span><select value={draft.reviewThinkingMode} onChange={(event) => set("reviewThinkingMode", event.target.value as AppSettings["reviewThinkingMode"])} disabled={!cap.supportsThinking && !cap.supportsReasoningEffort}><option value="off">关闭</option><option value="auto">自动</option><option value="on">开启</option></select></label><div className="hint-card">自动更新暂未启用；发布源和签名策略确认后再开放。</div></div></Panel></section>}
       {section === "compare" && <section className="settings-grid single"><Panel title="评价返款对比设置" icon={Check}><div className="toggle-list"><Toggle checked={draft.compareAutoOpenReminderDialog} label="验证后自动弹出需催促名单" onChange={(value) => set("compareAutoOpenReminderDialog", value)} /><Toggle checked={draft.compareShowPassedRowsAfterVerify} label="右侧验证后显示已通过人员" onChange={(value) => set("compareShowPassedRowsAfterVerify", value)} /></div></Panel></section>}
       <div className="settings-savebar"><span>当前正在调整：{sections.find((item) => item.key === section)?.label}</span><span className="settings-autosave-hint">{lastSaved ? `已自动保存 ${new Date(lastSaved).toLocaleTimeString()}` : ""}</span></div>
@@ -1572,16 +1581,16 @@ function isTodayRebateRow(row: RebateRow) {
 
 function toolForView(view: ViewKey): "home" | ToolboxTool {
   if (view === "home") return "home";
-  if (view === "video" || view === "review" || view === "compare" || view === "settings") return view;
+  if (view === "video" || view === "review" || view === "compare" || view === "image" || view === "settings") return view;
   return "rebate";
 }
 
 function viewTitle(view: ViewKey) {
-  return { home: "工具首页", import: "导入金额与备注", entry: "逐条识别收款信息", preview: "表格预览与修正", export: "导出支付宝模板", video: "视频批量剪辑", review: "收评助手", compare: "评价返款对比", settings: "设置中心" }[view];
+  return { home: "工具首页", import: "导入金额与备注", entry: "逐条识别收款信息", preview: "表格预览与修正", export: "导出支付宝模板", video: "视频批量剪辑", review: "收评助手", compare: "评价返款对比", image: "生图工作台", settings: "设置中心" }[view];
 }
 
 function toolEyebrow(tool: "home" | ToolboxTool) {
-  return { home: "工具首页", rebate: "支付宝批量返款", video: "电商视频制作", review: "评价运营", compare: "评价状态核对", settings: "全局配置" }[tool];
+  return { home: "工具首页", rebate: "支付宝批量返款", video: "电商视频制作", review: "评价运营", compare: "评价状态核对", image: "图片生产", settings: "全局配置" }[tool];
 }
 
 function statusLabel(status: RebateRow["status"]) {

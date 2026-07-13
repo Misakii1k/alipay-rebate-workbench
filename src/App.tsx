@@ -9,6 +9,7 @@ import {
   EyeOff,
   Film,
   FileSpreadsheet,
+  ImagePlus,
   KeyRound,
   PanelLeftClose,
   PanelLeftOpen,
@@ -56,9 +57,9 @@ import {
   syncActiveApiProfile
 } from "./lib/shared";
 
-type ViewKey = "home" | RebateViewKey | "video" | "review" | "compare" | "settings";
+type ViewKey = "home" | RebateViewKey | "video" | "review" | "compare" | "image" | "settings";
 
-const APP_VERSION = "1.0.4";
+const APP_VERSION = "1.1.0";
 const MAKER_CREDIT = "Made by Misaki";
 const CHANGELOG_ITEMS = [
   "1.0.4 识别成功提示条动画改为从左侧滑入，更顺滑。",
@@ -121,6 +122,7 @@ const toolNavItems: Array<{ key: "home" | ToolboxTool; label: string; desc: stri
   { key: "video", label: "视频批量剪辑", desc: "模板化短视频制作，智能匹配视频库素材，一键批量渲染", icon: Film },
   { key: "review", label: "收评助手", desc: "搜索本地参考图，AI 生成买家好评文案，支持多种评价风格", icon: MessageSquareText },
   { key: "compare", label: "评价返款对比", desc: "导入返款名单和实际评价，自动去重匹配，差异置顶标红", icon: Check },
+  { key: "image", label: "生图工作台", desc: "第三方 AI 生图、本地图片裁切、扩边和模板化批处理", icon: ImagePlus },
   { key: "settings", label: "设置", desc: "配置 API 密钥、文件路径、主题外观、快捷键等全局选项", icon: Settings }
 ];
 
@@ -937,6 +939,7 @@ export default function App() {
           {view === "video" && <VideoWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} onStateChange={setVideoState} showToast={showToast} />}
           {view === "review" && <ReviewAssistant settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} onSaveSettings={saveSettings} showToast={showToast} modelConnected={modelStatus.state === "connected"} />}
           {view === "compare" && <CompareWorkbench settings={settings} resolvedPerformanceMode={resolvedPerformanceMode} showToast={showToast} />}
+          {view === "image" && <Panel title="生图工作台" icon={ImagePlus}><EmptyState text="正式生图工作台已在 Tauri 版本中启用，Electron 版本仅保留入口清理。" /></Panel>}
         </Suspense>
 
         {view === "settings" && <SettingsView settings={settings} onSave={saveSettings} modelStatus={modelStatus} onTestModel={async (draft) => {
@@ -1554,16 +1557,16 @@ function isTodayRebateRow(row: RebateRow) {
 
 function toolForView(view: ViewKey): "home" | ToolboxTool {
   if (view === "home") return "home";
-  if (view === "video" || view === "review" || view === "compare" || view === "settings") return view;
+  if (view === "video" || view === "review" || view === "compare" || view === "image" || view === "settings") return view;
   return "rebate";
 }
 
 function viewTitle(view: ViewKey) {
-  return { home: "工具首页", import: "导入金额与备注", entry: "逐条识别收款信息", preview: "表格预览与修正", export: "导出支付宝模板", video: "视频批量剪辑", review: "收评助手", compare: "评价返款对比", settings: "设置中心" }[view];
+  return { home: "工具首页", import: "导入金额与备注", entry: "逐条识别收款信息", preview: "表格预览与修正", export: "导出支付宝模板", video: "视频批量剪辑", review: "收评助手", compare: "评价返款对比", image: "生图工作台", settings: "设置中心" }[view];
 }
 
 function toolEyebrow(tool: "home" | ToolboxTool) {
-  return { home: "工具首页", rebate: "支付宝批量返款", video: "电商视频制作", review: "评价运营", compare: "评价状态核对", settings: "全局配置" }[tool];
+  return { home: "工具首页", rebate: "支付宝批量返款", video: "电商视频制作", review: "评价运营", compare: "评价状态核对", image: "图片生产", settings: "全局配置" }[tool];
 }
 
 function statusLabel(status: RebateRow["status"]) {

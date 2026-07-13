@@ -836,47 +836,6 @@ pub struct VideoRenderProgress {
 }
 
 // ============================================================================
-// 标题优化（占位类型）
-// ============================================================================
-
-/// 标题分析请求。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TitleAnalyzeRequest {
-    pub text: String,
-    #[serde(default)]
-    pub settings: Option<AppSettings>,
-}
-
-/// 标题分析结果。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct TitleAnalyzeResult {
-    pub score: f64,
-    pub suggestions: Vec<String>,
-}
-
-/// 标题生成请求。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TitleGenerateRequest {
-    pub text: String,
-    #[serde(default)]
-    pub settings: Option<AppSettings>,
-    #[serde(default)]
-    pub count: Option<u32>,
-}
-
-/// 标题候选项。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TitleCandidate {
-    pub title: String,
-    pub score: f64,
-    pub reason: String,
-}
-
-// ============================================================================
 // 单元测试
 // ============================================================================
 

@@ -1,7 +1,7 @@
 //! 电商运营工具箱 Tauri 后端入口
 //!
 //! 阶段 3a：注册 11 个基础模块的命令到 invoke_handler。
-//! 阶段 3b：追加业务模块命令（ffmpeg/ai/export/recognition/review/title/video）。
+//! 阶段 3b：追加业务模块命令（ffmpeg/ai/export/recognition/review/video）。
 
 // 阶段 3a：基础模块
 pub mod clipboard;
@@ -21,9 +21,9 @@ pub mod workbench;
 pub mod ai;
 pub mod export;
 pub mod ffmpeg;
+pub mod image_ops;
 pub mod recognition;
 pub mod review;
-pub mod title;
 pub mod video;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -74,6 +74,8 @@ pub fn run() {
             // 媒体
             media::media_latest_image,
             media::media_image_preview,
+            image_ops::image_process_batch,
+            image_ops::image_generate,
             // 更新
             update::update_check,
             update::update_download,
@@ -100,10 +102,6 @@ pub fn run() {
             review::review_rebuild_index,
             review::review_generate_copy,
             review::review_chat,
-            review::drag_start_files,
-            // 标题评分与 AI 标题生成
-            title::title_analyze,
-            title::title_generate,
             // 视频库扫描与 FFmpeg 渲染
             video::video_scan_library,
             video::video_render_task,

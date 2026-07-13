@@ -10,7 +10,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
@@ -22,6 +21,10 @@ import type {
   ExportPayload,
   ExportResult,
   FfmpegStatus,
+  ImageGenerationPayload,
+  ImageGenerationResult,
+  ImageProcessPayload,
+  ImageProcessResult,
   ModelConnectionStatus,
   RecognitionLearningPayload,
   RecognitionLearningResult,
@@ -125,7 +128,7 @@ function filtersForKind(kind: SelectFilesOptions["kind"]): Array<{ name: string;
  * alipayWorkbench 与原 Electron preload.ts 暴露的 API 完全一致。
  * 调用方式：`alipayWorkbench.loadSettings()` 等，与原 `window.alipayWorkbench.loadSettings()` 等价。
  */
-export const alipayWorkbench = {
+const tauriWorkbench = {
   // ---------------- settings ----------------
   loadSettings: (): Promise<AppSettings> => invoke<AppSettings>("settings_load"),
   saveSettings: (settings: AppSettings): Promise<AppSettings> => invoke<AppSettings>("settings_save", { settings }),
@@ -226,6 +229,12 @@ export const alipayWorkbench = {
   getLatestImageInDirectory: (dir: string): Promise<string> => invoke<string>("media_latest_image", { dir }),
   getImagePreview: (filePath: string): Promise<string> => invoke<string>("media_image_preview", { filePath }),
 
+  // ---------------- image workbench ----------------
+  processImages: (payload: ImageProcessPayload): Promise<ImageProcessResult[]> =>
+    invoke<ImageProcessResult[]>("image_process_batch", { payload }),
+  generateImages: (payload: ImageGenerationPayload): Promise<ImageGenerationResult[]> =>
+    invoke<ImageGenerationResult[]>("image_generate", { payload }),
+
   // ---------------- review ----------------
   scanReviewAssets: (
     root: string,
@@ -266,9 +275,6 @@ export const alipayWorkbench = {
       if (unlisten) unlisten();
     };
   },
-
-  // ---------------- drag ----------------
-  startDragFiles: (paths: string[]): Promise<void> => invoke<void>("drag_start_files", { paths }),
 
   // ---------------- review generation / chat ----------------
   generateReviewCopy: (settings: AppSettings, options: ReviewGenerationOptions): Promise<ReviewGenerationResult> =>
@@ -325,7 +331,7 @@ export const alipayWorkbench = {
   readClipboard: (): Promise<ClipboardSnapshot> => invoke<ClipboardSnapshot>("clipboard_read"),
   writeClipboardText: async (text: string): Promise<void> => {
     if (isTauri()) {
-      await writeText(text);
+      await invoke("clipboard_write_text", { text });
       return;
     }
     await navigator.clipboard?.writeText?.(text);
@@ -364,4 +370,21 @@ export const alipayWorkbench = {
     invoke<RecognitionLearningResult>("recognition_learn_from_choice", { payload, settings })
 };
 
-export type AlipayWorkbenchApi = typeof alipayWorkbench;
+/**
+ * Components import this bridge directly. In browser preview mode, route those
+ * calls to main.tsx's local mock instead of attempting Tauri IPC.
+ */
+export const alipayWorkbench = new Proxy(tauriWorkbench, {
+  get(target, property, receiver) {
+    if (!isTauri() && typeof window !== "undefined") {
+      const browserBridge = window.alipayWorkbench;
+      if (browserBridge && browserBridge !== target) {
+        const value = Reflect.get(browserBridge, property);
+        return typeof value === "function" ? value.bind(browserBridge) : value;
+      }
+    }
+    return Reflect.get(target, property, receiver);
+  }
+}) as typeof tauriWorkbench;
+
+export type AlipayWorkbenchApi = typeof tauriWorkbench;

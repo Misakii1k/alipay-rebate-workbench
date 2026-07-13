@@ -4,7 +4,7 @@ import {
   Keyboard, Loader2, RefreshCw, RotateCcw, Search, Sparkles, Star, StarOff, Trash2, WandSparkles, X
 } from "lucide-react";
 import clsx from "clsx";
-import { alipayWorkbench } from "@/lib/tauri-bridge";
+import { alipayWorkbench, TAURI_FILE_DROP_EVENT } from "@/lib/tauri-bridge";
 import type { AppSettings, ReviewChatMessage, ReviewGenerationOptions, ReviewSearchResult, ReviewThinkingMode, ReviewWorkspaceMode } from "./lib/shared";
 import { getReviewApiProfile } from "./lib/shared";
 
@@ -420,6 +420,25 @@ export function ReviewAssistant({
     if (imageFiles.length > remaining) showToast(`已加入 ${remaining} 张图片，最多支持 ${CHAT_IMAGE_LIMIT} 张。`);
   }
 
+  async function handleChatImagePaths(paths: string[]) {
+    const imagePaths = paths.filter((path) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(path));
+    if (!imagePaths.length) return;
+    const remaining = Math.max(0, CHAT_IMAGE_LIMIT - chatUploadedImages.length);
+    if (!remaining) {
+      showToast(`最多保留 ${CHAT_IMAGE_LIMIT} 张对话参考图。`);
+      return;
+    }
+    const urls = (await Promise.all(
+      imagePaths.slice(0, remaining).map((path) => alipayWorkbench.getImagePreview(path).catch(() => ""))
+    )).filter(Boolean);
+    if (!urls.length) {
+      showToast("无法读取拖入图片，请确认文件仍可访问。");
+      return;
+    }
+    setChatUploadedImages((previous) => [...previous, ...urls].slice(0, CHAT_IMAGE_LIMIT));
+    if (imagePaths.length > remaining) showToast(`已加入 ${remaining} 张图片，最多支持 ${CHAT_IMAGE_LIMIT} 张。`);
+  }
+
   function removeChatImage(index: number) {
     setChatUploadedImages((prev) => prev.filter((_, i) => i !== index));
   }
@@ -708,11 +727,6 @@ export function ReviewAssistant({
     setPreview(loaded);
   }
 
-  function dragPathsFor(item: ReviewSearchResult) {
-    const paths = visiblePathGroups.get(item.path) ?? selectablePaths(item);
-    return paths.some((path) => selectedSet.has(path)) && selected.length ? selected : paths;
-  }
-
   function loadMoreResults() {
     if (loadingMore || visibleCount >= results.length) return;
     setLoadingMore(true);
@@ -909,7 +923,6 @@ export function ReviewAssistant({
               onSelectFolderChildren={selectFolderChildren}
               onLoadMoreFolderChildren={loadMoreFolderChildren}
               onPreview={setPreview}
-              dragPathsFor={dragPathsFor}
               thumbnailMap={thumbnailMap}
               thumbSize={thumbSize}
             />
@@ -956,6 +969,7 @@ export function ReviewAssistant({
           chatting={chatting}
           onSend={() => void sendChatMessage()}
           onImageFiles={handleChatImageFiles}
+          onImagePaths={handleChatImagePaths}
           onRemoveImage={removeChatImage}
           selectedImageCount={selectedImageCount}
           onAttachSelectedImages={() => void attachSelectedImagesToChat()}
@@ -1206,7 +1220,7 @@ function ReviewToolbar({ selectedImages, selectedCards, totalResults, visibleCou
           <option value="name-asc">文件名 A-Z</option>
           <option value="name-desc">文件名 Z-A</option>
         </select>
-        {selectedImages > 0 && (<><span className="review-v2-selected-chip review-v2-selected-chip-readable"><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span><span className="review-v2-drag-hint">拖拽缩略图即可同时移动全部所选</span><button className="review-v2-toolbar-btn" onClick={onClear} title="清空当前内容">清空选中</button></>)}
+        {selectedImages > 0 && (<><span className="review-v2-selected-chip review-v2-selected-chip-readable"><Check size={12} /> {selectedCards} 个卡片 / 共 {selectedImages} 张图</span><button className="review-v2-toolbar-btn" onClick={onClear} title="清空当前内容">清空选中</button></>)}
         {totalResults > 0 && <button className="review-v2-toolbar-btn" onClick={onSelectAll} title="选择当前搜索结果中的全部图片">全选可见</button>}
       </div>
     </div>
@@ -1229,12 +1243,11 @@ interface ReviewResultGridProps {
   onSelectFolderChildren: (item: ReviewSearchResult) => void | Promise<void>;
   onLoadMoreFolderChildren: (item: ReviewSearchResult) => void | Promise<void>;
   onPreview: (item: ReviewSearchResult) => void;
-  dragPathsFor: (item: ReviewSearchResult) => string[];
   thumbnailMap: Record<string, string>;
   thumbSize?: ReviewThumbSize;
 }
 
-function ReviewResultGrid({ items, selectedKeys, expandedFolders, loadingFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onLoadMoreFolderChildren, onPreview, dragPathsFor, thumbnailMap, thumbSize = "medium" }: ReviewResultGridProps) {
+function ReviewResultGrid({ items, selectedKeys, expandedFolders, loadingFolders, onToggleExpand, onToggle, onPointerSelect, onPointerEnterSelect, onSelectFolderChildren, onLoadMoreFolderChildren, onPreview, thumbnailMap, thumbSize = "medium" }: ReviewResultGridProps) {
   return (
     <div className="review-v2-grid" data-thumb-size={thumbSize}>
       {items.map((item, index) => {
@@ -1249,7 +1262,7 @@ function ReviewResultGrid({ items, selectedKeys, expandedFolders, loadingFolders
         const thumbDataUrl = item.thumbnailDataUrl ?? thumbnailMap[item.path] ?? folderCover;
         return (
           <Fragment key={item.path}>
-            <button className={clsx("review-v2-card list-item", isFolder && "is-folder", isSelected && "selected")} style={{ "--i": index } as React.CSSProperties} draggable onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} onDragStart={(event) => { const paths = dragPathsFor(item); onPreview(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (alipayWorkbench.startDragFiles) { event.preventDefault(); void alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
+            <button className={clsx("review-v2-card list-item", isFolder && "is-folder", isSelected && "selected")} style={{ "--i": index } as React.CSSProperties} onClick={() => onToggle(item)} onPointerDown={() => onPreview(item)} onPointerEnter={() => onPointerEnterSelect(item)} onMouseEnter={() => onPreview(item)} title="选择或取消选择这张参考图">
               <div className="review-v2-thumb">
                 {thumbDataUrl ? <img src={thumbDataUrl} alt={item.name} /> : <ImageIcon size={28} />}
                 {isFolder && folderChildCount > 0 && <span className="review-v2-folder-badge"><FolderOpen size={12} /> {folderChildCount}</span>}
@@ -1273,7 +1286,7 @@ function ReviewResultGrid({ items, selectedKeys, expandedFolders, loadingFolders
               const childSelected = selectedKeys.has(child.path);
               const childThumbDataUrl = child.thumbnailDataUrl ?? thumbnailMap[child.path];
               return (
-                <button key={child.path} className={clsx("review-v2-card review-v2-child-card", childSelected && "selected")} draggable onClick={() => onToggle(child)} onPointerDown={() => onPreview(child)} onPointerEnter={() => onPointerEnterSelect(child)} onMouseEnter={() => onPreview(child)} onDragStart={(event) => { const paths = dragPathsFor(child); onPreview(child); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", paths.join("\n")); if (alipayWorkbench.startDragFiles) { event.preventDefault(); void alipayWorkbench.startDragFiles(paths); } else { event.dataTransfer.setData("text/uri-list", paths.join("\n")); } }} title="选择或取消选择这张参考图">
+                <button key={child.path} className={clsx("review-v2-card review-v2-child-card", childSelected && "selected")} onClick={() => onToggle(child)} onPointerDown={() => onPreview(child)} onPointerEnter={() => onPointerEnterSelect(child)} onMouseEnter={() => onPreview(child)} title="选择或取消选择这张参考图">
                   <div className="review-v2-thumb">
                     {childThumbDataUrl ? <img src={childThumbDataUrl} alt={child.name} /> : <ImageIcon size={24} />}
                     {childSelected && <span className="review-v2-check"><Check size={14} /></span>}
@@ -1349,6 +1362,7 @@ interface ReviewAIPanelProps {
   chatting: boolean;
   onSend: () => void;
   onImageFiles: (files: FileList | File[]) => void | Promise<void>;
+  onImagePaths: (paths: string[]) => void | Promise<void>;
   onRemoveImage: (index: number) => void;
   selectedImageCount: number;
   onAttachSelectedImages: () => void;
@@ -1388,6 +1402,7 @@ function ReviewAIPanel({
   chatting,
   onSend,
   onImageFiles,
+  onImagePaths,
   onRemoveImage,
   selectedImageCount,
   onAttachSelectedImages,
@@ -1418,6 +1433,21 @@ function ReviewAIPanel({
     const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
     if (files.length) void onImageFiles(files);
   }
+
+  useEffect(() => {
+    const element = chatDropRef.current;
+    if (!element) return;
+    const handleNativeDrop = (event: Event) => {
+      const paths = (event as CustomEvent<{ paths?: string[] }>).detail?.paths ?? [];
+      if (!paths.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setDragOver(false);
+      void onImagePaths(paths);
+    };
+    element.addEventListener(TAURI_FILE_DROP_EVENT, handleNativeDrop as EventListener);
+    return () => element.removeEventListener(TAURI_FILE_DROP_EVENT, handleNativeDrop as EventListener);
+  }, [chatDropRef, onImagePaths]);
 
   return (
     <section className="review-v2-chat-panel">

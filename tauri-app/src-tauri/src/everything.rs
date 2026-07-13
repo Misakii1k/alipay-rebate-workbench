@@ -1,23 +1,20 @@
-//! Everything (voidtools) 搜索集成模块
+//! Everything (voidtools) search integration.
 //!
-//! 对应原 `electron/utils/everything.ts` + `electron/utils/everythingSearch.ts`
-//! + `electron/handlers/everything.ts`。
-//!
-//! - 通过调用 es.exe 子进程执行搜索
-//! - 命令 `everything_test` 检查 es.exe 是否可用
-//! - 辅助函数 `search_with_everything` 供 review 模块（阶段 3b）调用
+//! The bundled `es.exe` is a command-line client, not the Everything GUI. It
+//! needs an already-running Everything service and writes output in the Windows
+//! ANSI code page.
 
 use crate::security::{is_path_inside_root, sanitize_everything_query};
 use crate::types::{AppSettings, EverythingStatus};
-use std::path::Path;
+use encoding_rs::GB18030;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::AppHandle;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-/// Windows：避免子进程弹出/闪烁控制台窗口。
-/// es.exe 是控制台程序，Tauri 是纯 GUI 进程，调用时若不加该标志会闪黑窗。
-/// spec「revert-to-classic-everything-search」明确要求保留 CREATE_NO_WINDOW。
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -31,151 +28,116 @@ fn no_window(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-/// 候选 es.exe 路径列表（已知安装位置）。
-fn known_everything_candidates() -> Vec<String> {
-    vec![
-        // Tauri resources 目录
-        "resources/bin/es.exe".to_string(),
-        // 用户安装路径
-        r"C:\Program Files\Everything\es.exe".to_string(),
-        r"C:\Program Files (x86)\Everything\es.exe".to_string(),
-        // PATH 中查找
-        "es.exe".to_string(),
-    ]
+fn known_everything_candidates() -> Vec<PathBuf> {
+    let program_files = std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
+    let program_files_x86 = std::env::var_os("ProgramFiles(x86)")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)"));
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+
+    let mut candidates = vec![
+        program_files.join("Everything").join("es.exe"),
+        program_files_x86.join("Everything").join("es.exe"),
+    ];
+    if let Some(local_app_data) = local_app_data {
+        candidates.push(local_app_data.join("Everything").join("es.exe"));
+    }
+    candidates
 }
 
-/// 解析 es.exe 路径：
-/// 1. 优先使用 settings.everythingEsPath
-/// 2. 回退到已知候选路径
-pub fn resolve_everything_es_path(settings: &AppSettings) -> String {
+/// Resolve a verified executable path. The Tauri resource path is used before
+/// any machine-wide installation so development and packaged builds behave the
+/// same way.
+pub fn resolve_everything_es_path(app: &AppHandle, settings: &AppSettings) -> String {
     let mut candidates = Vec::new();
-    if !settings.everything_es_path.is_empty() {
-        candidates.push(settings.everything_es_path.clone());
+    if !settings.everything_es_path.trim().is_empty() {
+        candidates.push(PathBuf::from(&settings.everything_es_path));
     }
+    candidates.push(crate::paths::get_es_path(app));
     candidates.extend(known_everything_candidates());
 
-    for candidate in candidates {
-        if candidate.is_empty() {
-            continue;
-        }
-        // 如果是相对路径或纯文件名，跳过存在性检查（依赖 PATH）
-        if Path::new(&candidate).is_absolute() {
-            if Path::new(&candidate).exists() {
-                return candidate;
-            }
-        } else {
-            // 依赖 PATH 解析，直接返回（test 时会失败）
-            return candidate;
-        }
-    }
-    String::new()
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
-/// 调用 es.exe 搜索文件。
-///
-/// 参数：
-/// - `es_path`: es.exe 路径
-/// - `root`: 搜索根目录（空字符串表示全盘）
-/// - `query`: 搜索关键词（会自动消毒）
-/// - `exts`: 文件扩展名集合（如 `{".jpg", ".png"}`）
-/// - `max_results`: 最大返回数
+fn build_es_args(root: &str, query: &str, exts: &HashSet<String>, max_results: usize) -> Vec<String> {
+    let ext_list = exts
+        .iter()
+        .map(|extension| extension.trim_start_matches('.').to_string())
+        .collect::<Vec<_>>();
+    let mut args = vec!["-n".to_string(), max_results.to_string()];
+
+    if !root.is_empty() {
+        args.push("-path".to_string());
+        args.push(root.to_string());
+    }
+    if !ext_list.is_empty() {
+        args.push(format!("ext:{}", ext_list.join(";")));
+    }
+    if !query.trim().is_empty() {
+        let query = sanitize_everything_query(query);
+        if !query.is_empty() {
+            args.push(query);
+        }
+    }
+    args
+}
+
+fn decode_es_output(output: &[u8]) -> String {
+    let (decoded, _, _) = GB18030.decode(output);
+    decoded.into_owned()
+}
+
+/// Execute a filtered Everything search. `es.exe` 1.1.0.x does not support a
+/// `-utf8` switch, so its output is decoded as GB18030 (a superset of GBK).
 pub fn search_with_everything(
     es_path: &str,
     root: &str,
     query: &str,
-    exts: &std::collections::HashSet<String>,
+    exts: &HashSet<String>,
     max_results: usize,
 ) -> Vec<String> {
     if es_path.is_empty() {
         return Vec::new();
     }
 
-    // 构造扩展名参数：ext:jpg;png;webp
-    let ext_list: Vec<String> = exts
-        .iter()
-        .map(|e| e.trim_start_matches('.').to_string())
-        .collect();
-    let ext_arg = ext_list.join(";");
-
-    let mut args: Vec<String> = Vec::new();
-    // -utf8：强制 es.exe 以 UTF-8 输出，否则中文 Windows 下默认按系统码页(GBK)输出，
-    // 中文路径会被 from_utf8_lossy 解析成替换字符，随后因「路径不存在」被过滤掉，
-    // 导致中文关键词搜索结果为空。这是中文搜索可用性的关键。
-    args.push("-utf8".to_string());
-    args.push("-n".to_string());
-    args.push(max_results.to_string());
-    if !root.is_empty() {
-        args.push("-path".to_string());
-        args.push(root.to_string());
-    }
-    if !ext_arg.is_empty() {
-        args.push(format!("ext:{}", ext_arg));
-    }
-
-    // 添加消毒后的查询词
-    if !query.trim().is_empty() {
-        let clean = sanitize_everything_query(query);
-        if !clean.is_empty() {
-            args.push(clean);
-        }
-    }
-
     let mut command = Command::new(es_path);
-    command.args(&args);
+    command.args(build_es_args(root, query, exts, max_results));
     no_window(&mut command);
-    let output = command.output();
-
-    let output = match output {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
+    let output = match command.output() {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
     };
 
-    if !output.status.success() {
-        return Vec::new();
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().filter(|s| !s.is_empty()).collect();
-
-    // 过滤：必须存在 + 在 root 下 + 扩展名匹配
-    lines
-        .into_iter()
-        .filter(|line| {
-            let path = line.trim();
-            if path.is_empty() {
-                return false;
-            }
-            if !Path::new(path).exists() {
-                return false;
-            }
-            if !root.is_empty() && !is_path_inside_root(path, root) {
-                return false;
-            }
-            let ext = Path::new(path)
+    decode_es_output(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .filter(|path| Path::new(path).exists())
+        .filter(|path| root.is_empty() || is_path_inside_root(path, root))
+        .filter(|path| {
+            let extension = Path::new(path)
                 .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| format!(".{}", e.to_lowercase()))
+                .and_then(|extension| extension.to_str())
+                .map(|extension| format!(".{}", extension.to_lowercase()))
                 .unwrap_or_default();
-            exts.contains(&ext)
+            exts.contains(&extension)
         })
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .collect()
 }
 
-// ============================================================================
-// Tauri 命令
-// ============================================================================
-
-/// 测试 Everything 是否可用（对应 `everything:test` IPC 通道）。
-///
-/// 对齐 electron 基线与 spec「revert-to-classic-everything-search」：
-/// - 解析 es.exe 路径，找不到则返回友好提示。
-/// - 用一个简单 test 查询执行 `search_with_everything`，能正常执行即视为可用。
-/// - 不自动拉起 Everything 服务，不弹出任何窗口。
 #[tauri::command]
-pub async fn everything_test(settings: AppSettings) -> Result<EverythingStatus, String> {
-    let es_path = resolve_everything_es_path(&settings);
-
+pub async fn everything_test(
+    settings: AppSettings,
+    app: AppHandle,
+) -> Result<EverythingStatus, String> {
+    let es_path = resolve_everything_es_path(&app, &settings);
     if es_path.is_empty() {
         return Ok(EverythingStatus {
             available: false,
@@ -183,91 +145,69 @@ pub async fn everything_test(settings: AppSettings) -> Result<EverythingStatus, 
         });
     }
 
-    // 在阻塞线程中执行一次轻量探测搜索（es.exe 是同步子进程）。
-    let probe_path = es_path.clone();
-    let executed = tokio::task::spawn_blocking(move || {
-        run_es_probe(&probe_path)
-    })
-    .await
-    .unwrap_or(false);
-
-    if executed {
-        Ok(EverythingStatus {
+    let executed = tokio::task::spawn_blocking(move || run_es_probe(&es_path))
+        .await
+        .unwrap_or(false);
+    Ok(if executed {
+        EverythingStatus {
             available: true,
             detail: "Everything 已就绪，搜索可用。".to_string(),
-        })
+        }
     } else {
-        Ok(EverythingStatus {
+        EverythingStatus {
             available: false,
             detail: "es.exe 已找到但执行失败，请确认 Everything 主程序正在后台运行。".to_string(),
-        })
-    }
+        }
+    })
 }
 
-/// 执行一次最小化的 es.exe 探测（`-utf8 -n 1 test`），能成功执行返回 true。
 fn run_es_probe(es_path: &str) -> bool {
     let mut command = Command::new(es_path);
-    command.args(["-utf8", "-n", "1", "test"]);
+    command.args(["-n", "1", "test"]);
     no_window(&mut command);
-    match command.output() {
-        Ok(o) => o.status.success(),
-        Err(_) => false,
-    }
+    command.output().is_ok_and(|output| output.status.success())
 }
-
-// ============================================================================
-// 单元测试
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     #[test]
-    fn test_known_everything_candidates_not_empty() {
+    fn test_known_everything_candidates_are_es_executables() {
         let candidates = known_everything_candidates();
         assert!(!candidates.is_empty());
-        // 应包含 Tauri resources 路径
-        assert!(candidates.iter().any(|c| c.contains("resources")));
+        assert!(candidates.iter().all(|path| path.ends_with("es.exe")));
     }
 
     #[test]
-    fn test_resolve_everything_es_path_empty_settings() {
-        let settings = AppSettings::default();
-        // 默认配置中 everythingEsPath 为空
-        // 应该回退到候选路径
-        let resolved = resolve_everything_es_path(&settings);
-        // 在测试环境下 es.exe 可能存在于 resources/bin，返回完整路径或空
-        assert!(resolved.is_empty() || resolved.ends_with("es.exe"));
+    fn test_build_es_args_uses_supported_switches() {
+        let exts = HashSet::from([".jpg".to_string(), ".png".to_string()]);
+        let args = build_es_args(r"C:\素材", "产品 01", &exts, 42);
+        assert_eq!(
+            &args[0..4],
+            &["-n".to_string(), "42".to_string(), "-path".to_string(), r"C:\素材".to_string()]
+        );
+        assert!(!args.iter().any(|arg| arg == "-utf8"));
+        assert!(args.iter().any(|arg| arg.starts_with("ext:")));
+        assert_eq!(args.last(), Some(&"产品 01".to_string()));
     }
 
     #[test]
-    fn test_resolve_everything_es_path_with_custom_path() {
-        let mut settings = AppSettings::default();
-        settings.everything_es_path = r"C:\nonexistent\es.exe".to_string();
-        let resolved = resolve_everything_es_path(&settings);
-        // 自定义路径不存在，应该回退到候选路径
-        assert!(resolved.is_empty() || resolved.ends_with("es.exe"));
+    fn test_decode_es_output_gb18030() {
+        let (encoded, _, had_errors) = GB18030.encode(r"C:\素材\产品.jpg");
+        assert!(!had_errors);
+        assert_eq!(decode_es_output(&encoded), r"C:\素材\产品.jpg");
     }
 
     #[test]
     fn test_search_with_everything_empty_es_path() {
-        let exts: HashSet<String> = [".jpg".to_string()].iter().cloned().collect();
-        let result = search_with_everything("", "", "test", &exts, 10);
-        assert!(result.is_empty());
+        let exts = HashSet::from([".jpg".to_string()]);
+        assert!(search_with_everything("", "", "test", &exts, 10).is_empty());
     }
 
     #[test]
     fn test_search_with_everything_nonexistent_es_path() {
-        let exts: HashSet<String> = [".jpg".to_string()].iter().cloned().collect();
-        let result = search_with_everything(
-            r"C:\nonexistent\es.exe",
-            "",
-            "test",
-            &exts,
-            10,
-        );
-        assert!(result.is_empty());
+        let exts = HashSet::from([".jpg".to_string()]);
+        assert!(search_with_everything(r"C:\nonexistent\es.exe", "", "test", &exts, 10).is_empty());
     }
 }

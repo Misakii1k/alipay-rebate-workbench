@@ -15,14 +15,15 @@
 
 use crate::everything;
 use crate::ffmpeg;
-use crate::media;
-use crate::security::{is_path_inside_root, validate_media_file_path, validate_path_safety};
+use crate::security::{validate_media_file_path, validate_path_safety};
 use crate::types::{AppSettings, VideoCandidate, VideoRenderPayload, VideoRenderProgress, VideoRenderResult, VideoTask};
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -56,11 +57,81 @@ const VIDEO_EXTS: &[&str] = &[".mp4", ".mov", ".mkv", ".avi", ".webm"];
 /// 图片文件扩展名。
 const IMAGE_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp", ".bmp"];
 
+const MIN_VIDEO_MATCH_SCORE: f64 = 35.0;
+const MAX_VIDEO_CANDIDATES: usize = 80;
+const MIN_EVERYTHING_PATHS_BEFORE_SKIP_WALK: usize = 80;
+const MIN_SCORED_CANDIDATES_BEFORE_WALK: usize = 20;
+
+const SCAN_SUPERSEDED_ERROR: &str = "扫描请求已被新的请求替代。";
+
+struct ActiveVideoScan {
+    request_id: String,
+    cancellation: Arc<AtomicBool>,
+}
+
+static ACTIVE_VIDEO_SCAN: Lazy<Mutex<Option<ActiveVideoScan>>> = Lazy::new(|| Mutex::new(None));
+
 /// 全局运行中的 FFmpeg 进程表（task_id → 子进程句柄）。
 static RUNNING_PROCESSES: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
 
 /// 已取消的任务集合。
 static CANCELED_TASKS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+fn start_video_scan_request(request_id: Option<String>) -> (String, Arc<AtomicBool>) {
+    let request_id = request_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("video-scan-{}", Uuid::new_v4()));
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let mut active = ACTIVE_VIDEO_SCAN.lock().unwrap();
+    if let Some(previous) = active.replace(ActiveVideoScan {
+        request_id: request_id.clone(),
+        cancellation: Arc::clone(&cancellation),
+    }) {
+        previous.cancellation.store(true, Ordering::Release);
+    }
+    (request_id, cancellation)
+}
+
+fn finish_video_scan_request(request_id: &str, cancellation: &Arc<AtomicBool>) {
+    let mut active = ACTIVE_VIDEO_SCAN.lock().unwrap();
+    if active.as_ref().is_some_and(|current| {
+        current.request_id == request_id && Arc::ptr_eq(&current.cancellation, cancellation)
+    }) {
+        active.take();
+    }
+}
+
+fn ensure_video_scan_active(cancellation: &AtomicBool) -> Result<(), String> {
+    if cancellation.load(Ordering::Acquire) {
+        Err(SCAN_SUPERSEDED_ERROR.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn terminate_render_process(pid: u32) {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/F", "/T"]);
+        no_window(&mut cmd);
+        let _ = cmd.output();
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("kill");
+        cmd.arg("-9").arg(pid.to_string());
+        no_window(&mut cmd);
+        let _ = cmd.output();
+    }
+}
+
+fn clear_running_process(task_id: &str) {
+    let mut guard = RUNNING_PROCESSES.lock().unwrap();
+    if let Some(map) = guard.as_mut() {
+        map.remove(task_id);
+    }
+}
 
 // ============================================================================
 // 工具函数
@@ -135,10 +206,48 @@ fn build_match_terms(value: &str) -> Vec<String> {
         }
     }
 
-    terms.into_iter().filter(|t| t.len() >= 2).collect()
+    terms
+        .into_iter()
+        .filter(|t| t.chars().count() >= 2 || t.chars().any(|c| c.is_ascii_digit()))
+        .collect()
 }
 
 /// 计算两个字符串的字符集重叠率。
+fn push_unique_query(queries: &mut Vec<String>, query: &str) {
+    let clean = query.trim();
+    if clean.is_empty() {
+        return;
+    }
+    if clean.chars().count() < 2 && !clean.chars().any(|c| c.is_ascii_digit()) {
+        return;
+    }
+    if queries.iter().any(|q| q.eq_ignore_ascii_case(clean)) {
+        return;
+    }
+    queries.push(clean.to_string());
+}
+
+fn push_unique_path(keys: &mut HashSet<String>, paths: &mut Vec<String>, path: String) {
+    let key = path.to_lowercase();
+    if keys.insert(key) {
+        paths.push(path);
+    }
+}
+
+fn build_video_search_queries(product_name: &str, color_name: &str, terms: &[String]) -> Vec<String> {
+    let mut queries = Vec::new();
+    push_unique_query(&mut queries, &format!("{} {}", product_name, color_name));
+    push_unique_query(&mut queries, product_name);
+    push_unique_query(&mut queries, color_name);
+    for term in terms {
+        push_unique_query(&mut queries, term);
+        if queries.len() >= 12 {
+            break;
+        }
+    }
+    queries
+}
+
 fn token_overlap(a: &str, b: &str) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
@@ -209,11 +318,17 @@ fn score_media_candidate(root: &Path, file_path: &Path, terms: &[String]) -> Vid
         score += 4;
     }
 
+    let reason = if reasons.is_empty() {
+        "路径文字相似".to_string()
+    } else {
+        reasons.iter().take(3).cloned().collect::<Vec<_>>().join("；")
+    };
+
     VideoCandidate {
         path: file_path.to_string_lossy().to_string(),
         file_name: file_name.clone(),
         score: score as f64,
-        reason: reasons.iter().take(3).cloned().collect::<Vec<_>>().join("；"),
+        reason,
         kind: if VIDEO_EXTS.contains(&ext.as_str()) {
             Some("video".to_string())
         } else {
@@ -225,10 +340,20 @@ fn score_media_candidate(root: &Path, file_path: &Path, terms: &[String]) -> Vid
 }
 
 /// 递归扫描目录下的所有媒体文件（图片 + 视频）。
+#[cfg(test)]
 fn walk_for_media(root: &Path) -> Vec<PathBuf> {
+    let cancellation = AtomicBool::new(false);
+    walk_for_media_cancellable(root, &cancellation).unwrap_or_default()
+}
+
+fn walk_for_media_cancellable(
+    root: &Path,
+    cancellation: &AtomicBool,
+) -> Result<Vec<PathBuf>, String> {
     let mut results = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        ensure_video_scan_active(cancellation)?;
         if results.len() >= 50_000 {
             break;
         }
@@ -237,6 +362,7 @@ fn walk_for_media(root: &Path) -> Vec<PathBuf> {
             Err(_) => continue,
         };
         for entry in entries.flatten() {
+            ensure_video_scan_active(cancellation)?;
             if results.len() >= 50_000 {
                 break;
             }
@@ -252,7 +378,7 @@ fn walk_for_media(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    results
+    Ok(results)
 }
 
 // ============================================================================
@@ -271,6 +397,26 @@ pub fn scan_video_library(
     _speed_mode: bool,
     app: &AppHandle,
 ) -> Result<Vec<VideoCandidate>, String> {
+    let cancellation = AtomicBool::new(false);
+    scan_video_library_cancellable(
+        settings,
+        product_name,
+        color_name,
+        _speed_mode,
+        app,
+        &cancellation,
+    )
+}
+
+fn scan_video_library_cancellable(
+    settings: &AppSettings,
+    product_name: &str,
+    color_name: &str,
+    _speed_mode: bool,
+    app: &AppHandle,
+    cancellation: &AtomicBool,
+) -> Result<Vec<VideoCandidate>, String> {
+    ensure_video_scan_active(cancellation)?;
     let root = settings.video_library_dir.trim();
     if root.is_empty() {
         return Err("请先在设置中选择视频库文件夹。".to_string());
@@ -282,45 +428,63 @@ pub fn scan_video_library(
 
     let root_path = PathBuf::from(root);
     let terms = build_match_terms(&format!("{} {}", product_name, color_name));
+    let mut path_keys: HashSet<String> = HashSet::new();
+    let mut candidate_paths: Vec<String> = Vec::new();
 
-    // 优先使用 Everything 搜索；返回空（服务未运行/索引未就绪）时回退 walkdir 全目录扫描。
-    // 注意：内置 es.exe 总能解析到路径，所以不能只看「es_path 是否为空」来决定是否降级，
-    // 必须看「实际搜索是否拿到结果」，否则 Everything 服务没开就永远搜不到素材。
-    let es_path = everything::resolve_everything_es_path(settings);
-    let found_paths: Vec<String> = if !es_path.is_empty() {
+    ensure_video_scan_active(cancellation)?;
+    let es_path = everything::resolve_everything_es_path(app, settings);
+    if !es_path.is_empty() {
         let exts_set: HashSet<String> = IMAGE_EXTS.iter().chain(VIDEO_EXTS.iter()).map(|s| s.to_string()).collect();
-        let query = format!("{} {}", product_name, color_name);
-        everything::search_with_everything(&es_path, root, &query, &exts_set, 500)
-    } else {
-        Vec::new()
-    };
-
-    let mut candidates: Vec<VideoCandidate> = if !found_paths.is_empty() {
-        found_paths
-            .par_iter()
-            .map(|p| score_media_candidate(&root_path, Path::new(p), &terms))
-            .collect()
-    } else {
-        let all_files = walk_for_media(&root_path);
-        all_files
-            .par_iter()
-            .map(|p| score_media_candidate(&root_path, p, &terms))
-            .collect()
-    };
-
-    // 过滤零分项（如果有 query）
-    if !terms.is_empty() {
-        candidates.retain(|c| c.score > 0.0);
+        for query in build_video_search_queries(product_name, color_name, &terms) {
+            ensure_video_scan_active(cancellation)?;
+            let max_results = if query.split_whitespace().nth(1).is_some() { 1000 } else { 500 };
+            for path in everything::search_with_everything(&es_path, root, &query, &exts_set, max_results) {
+                ensure_video_scan_active(cancellation)?;
+                push_unique_path(&mut path_keys, &mut candidate_paths, path);
+            }
+        }
     }
 
-    // 按分数降序排序
-    candidates.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    candidates.truncate(500);
+    let mut walked = false;
+    if candidate_paths.len() < MIN_EVERYTHING_PATHS_BEFORE_SKIP_WALK {
+        walked = true;
+        for path in walk_for_media_cancellable(&root_path, cancellation)? {
+            ensure_video_scan_active(cancellation)?;
+            push_unique_path(&mut path_keys, &mut candidate_paths, path.to_string_lossy().to_string());
+        }
+    }
 
+    let score_candidates = |paths: &[String]| -> Result<Vec<VideoCandidate>, String> {
+        let mut scored: Vec<VideoCandidate> = paths
+            .par_iter()
+            .map(|p| {
+                ensure_video_scan_active(cancellation)?;
+                Ok(score_media_candidate(&root_path, Path::new(p), &terms))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        ensure_video_scan_active(cancellation)?;
+        if !terms.is_empty() {
+            scored.retain(|c| c.score >= MIN_VIDEO_MATCH_SCORE);
+        }
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        scored.truncate(MAX_VIDEO_CANDIDATES);
+        Ok(scored)
+    };
+
+    let mut candidates = score_candidates(&candidate_paths)?;
+    if !walked && !terms.is_empty() && candidates.len() < MIN_SCORED_CANDIDATES_BEFORE_WALK {
+        for path in walk_for_media_cancellable(&root_path, cancellation)? {
+            ensure_video_scan_active(cancellation)?;
+            push_unique_path(&mut path_keys, &mut candidate_paths, path.to_string_lossy().to_string());
+        }
+        candidates = score_candidates(&candidate_paths)?;
+    }
+
+    ensure_video_scan_active(cancellation)?;
     Ok(candidates)
 }
 
@@ -550,6 +714,21 @@ fn run_ffmpeg(
         map.insert(task_id.to_string(), pid);
     }
 
+    // stderr.read() can block indefinitely when FFmpeg is silent. A separate
+    // watchdog enforces the deadline independently of progress output.
+    let (watchdog_done, watchdog_wait) = std::sync::mpsc::channel::<()>();
+    let watchdog_timed_out = Arc::new(AtomicBool::new(false));
+    let watchdog_timed_out_for_thread = Arc::clone(&watchdog_timed_out);
+    let watchdog = std::thread::spawn(move || {
+        if watchdog_wait
+            .recv_timeout(Duration::from_millis(MAX_FFMPEG_RENDER_MS))
+            .is_err()
+        {
+            watchdog_timed_out_for_thread.store(true, Ordering::Relaxed);
+            terminate_render_process(pid);
+        }
+    });
+
     let mut log = format!("{}{}", args_log, hwaccel_info);
     let mut last_percent: f64 = 15.0;
     let start_time = std::time::Instant::now();
@@ -597,7 +776,8 @@ fn run_ffmpeg(
 
             // 检查超时
             if start_time.elapsed() > Duration::from_millis(MAX_FFMPEG_RENDER_MS) {
-                let _ = child.kill();
+                watchdog_timed_out.store(true, Ordering::Relaxed);
+                terminate_render_process(pid);
                 log = append_limited_log(&log, &format!("\nFFmpeg timed out after {}ms", MAX_FFMPEG_RENDER_MS));
                 break;
             }
@@ -614,6 +794,9 @@ fn run_ffmpeg(
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = watchdog_done.send(());
+            let _ = watchdog.join();
+            clear_running_process(task_id);
             log = append_limited_log(&log, &format!("\nFFmpeg 等待退出超时（{}ms），已强制终止", MAX_FFMPEG_RENDER_MS));
             // 标记为超时，供调用方判断是否触发 GPU→CPU 回退
             return VideoRenderResult {
@@ -628,12 +811,18 @@ fn run_ffmpeg(
         .code()
         .unwrap_or(-1);
 
-    // 清理 PID 记录
-    {
-        let mut guard = RUNNING_PROCESSES.lock().unwrap();
-        if let Some(map) = guard.as_mut() {
-            map.remove(task_id);
-        }
+    let _ = watchdog_done.send(());
+    let _ = watchdog.join();
+    clear_running_process(task_id);
+
+    if watchdog_timed_out.load(Ordering::Relaxed) {
+        log = append_limited_log(&log, &format!("\nFFmpeg render timed out after {}ms", MAX_FFMPEG_RENDER_MS));
+        return VideoRenderResult {
+            success: false,
+            output_path: None,
+            log,
+            error: Some("FFmpeg 渲染超时，已强制终止".to_string()),
+        };
     }
 
     // 检查是否被取消
@@ -1151,14 +1340,14 @@ pub async fn render_video_task(
     };
 
     // 缓存硬件加速检测结果（避免每次渲染 spawn 3 个 ffmpeg 子进程）
-    let hwaccels = ffmpeg::detect_hwaccel(&ffmpeg_path);
-    let has_hwaccel = !hwaccels.is_empty();
     let gpu_encoders = ffmpeg::detect_gpu_encoders(&ffmpeg_path);
+    // Runtime probes prove encoder availability. Do not add `-hwaccel auto`
+    // unless a hardware encoder completed a real synthetic encode.
+    let has_hwaccel = !gpu_encoders.is_empty();
     let hwaccel_info = if has_hwaccel {
-        let detected_str = if hwaccels.is_empty() { "未知".to_string() } else { hwaccels.join(", ") };
-        format!("[hwaccel] GPU 加速已启用，FFmpeg 支持的硬件加速器: {}\n", detected_str)
+        format!("[hwaccel] verified usable hardware encoders: {}\n", gpu_encoders.join(", "))
     } else {
-        "[hwaccel] 未检测到 GPU 加速器，使用 CPU 软件解码\n".to_string()
+        "[hwaccel] no usable hardware encoder; using CPU software decode\n".to_string()
     };
 
     // 推送准备进度
@@ -1203,10 +1392,13 @@ pub async fn render_video_task(
     };
 
     // 执行 FFmpeg（阶段标签根据编码器模式显示）
+    let gpu_encoding_enabled = settings.video_encoder_mode != "cpu" && !gpu_encoders.is_empty();
     let stage_label = match settings.video_encoder_mode.as_str() {
         "cpu" => format!("剪辑中（CPU 编码：{} 线程）", cpu_threads()),
-        "gpu" => "剪辑中（GPU 硬件编码）".to_string(),
-        _ => format!("剪辑中（GPU 优先，CPU {} 线程备用）", cpu_threads()),
+        "gpu" if gpu_encoding_enabled => "剪辑中（GPU 硬件编码）".to_string(),
+        "gpu" => format!("剪辑中（GPU 不可用，CPU 编码：{} 线程）", cpu_threads()),
+        _ if gpu_encoding_enabled => format!("剪辑中（GPU 优先，CPU {} 线程备用）", cpu_threads()),
+        _ => format!("剪辑中（CPU 编码：{} 线程）", cpu_threads()),
     };
     let mut result = run_ffmpeg(&ffmpeg_path, &args, &task.id, &stage_label, duration, Some(app), &hwaccel_info);
 
@@ -1302,20 +1494,42 @@ pub async fn video_scan_library(
     product_name: String,
     color_name: String,
     speed_mode: Option<bool>,
-    _request_id: Option<String>,
+    request_id: Option<String>,
     app: AppHandle,
 ) -> Result<Vec<VideoCandidate>, String> {
     let speed_mode = speed_mode.unwrap_or(false);
+    let (request_id, cancellation) = start_video_scan_request(request_id);
+    let scan_cancellation = Arc::clone(&cancellation);
     // 如果不是 speed_mode，加载缩略图
-    let candidates = tokio::task::spawn_blocking(move || {
-        scan_video_library(&settings, &product_name, &color_name, speed_mode, &app)
+    let scan_result = tokio::task::spawn_blocking(move || {
+        scan_video_library_cancellable(
+            &settings,
+            &product_name,
+            &color_name,
+            speed_mode,
+            &app,
+            scan_cancellation.as_ref(),
+        )
     })
     .await
-    .map_err(|e| format!("扫描任务失败：{}", e))??;
+    .map_err(|e| format!("扫描任务失败：{}", e));
+    let candidates = match scan_result {
+        Ok(Ok(candidates)) => candidates,
+        Ok(Err(error)) | Err(error) => {
+            finish_video_scan_request(&request_id, &cancellation);
+            return Err(error);
+        }
+    };
 
     // speed_mode 下直接返回
     if speed_mode {
+        finish_video_scan_request(&request_id, &cancellation);
         return Ok(candidates);
+    }
+
+    if let Err(error) = ensure_video_scan_active(cancellation.as_ref()) {
+        finish_video_scan_request(&request_id, &cancellation);
+        return Err(error);
     }
 
     // 加载缩略图（前 40 张图片）
@@ -1327,6 +1541,7 @@ pub async fn video_scan_library(
         .collect();
 
     if image_paths.is_empty() {
+        finish_video_scan_request(&request_id, &cancellation);
         return Ok(candidates);
     }
 
@@ -1334,7 +1549,19 @@ pub async fn video_scan_library(
         crate::review::load_review_thumbnail_batch(&image_paths, 280, None, 40)
     })
     .await
-    .map_err(|e| format!("加载缩略图失败：{}", e))?;
+    .map_err(|e| format!("加载缩略图失败：{}", e));
+    let thumbnails = match thumbnails {
+        Ok(thumbnails) => thumbnails,
+        Err(error) => {
+            finish_video_scan_request(&request_id, &cancellation);
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = ensure_video_scan_active(cancellation.as_ref()) {
+        finish_video_scan_request(&request_id, &cancellation);
+        return Err(error);
+    }
 
     let result: Vec<VideoCandidate> = candidates
         .into_iter()
@@ -1346,6 +1573,7 @@ pub async fn video_scan_library(
         })
         .collect();
 
+    finish_video_scan_request(&request_id, &cancellation);
     Ok(result)
 }
 
@@ -1381,22 +1609,7 @@ pub async fn video_cancel_render(task_id: String) -> Result<serde_json::Value, S
         set.insert(task_id.clone());
     }
 
-    // 终止进程
-    #[cfg(windows)]
-    {
-        let mut cmd = std::process::Command::new("taskkill");
-        cmd.args(&["/PID", &pid.unwrap().to_string(), "/F", "/T"]);
-        no_window(&mut cmd);
-        let _ = cmd.output();
-    }
-    #[cfg(not(windows))]
-    {
-        let mut cmd = std::process::Command::new("kill");
-        cmd.arg("-9")
-            .arg(pid.unwrap().to_string());
-        no_window(&mut cmd);
-        let _ = cmd.output();
-    }
+    terminate_render_process(pid.unwrap());
 
     Ok(serde_json::json!({ "canceled": true }))
 }
@@ -1408,6 +1621,27 @@ pub async fn video_cancel_render(task_id: String) -> Result<serde_json::Value, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_new_video_scan_cancels_previous_request() {
+        let (first_id, first) = start_video_scan_request(Some("first".to_string()));
+        let (second_id, second) = start_video_scan_request(Some("second".to_string()));
+
+        assert!(first.load(Ordering::Acquire));
+        assert!(!second.load(Ordering::Acquire));
+
+        // A stale completion must not clear the newer active scan.
+        finish_video_scan_request(&first_id, &first);
+        assert!(ACTIVE_VIDEO_SCAN.lock().unwrap().is_some());
+        finish_video_scan_request(&second_id, &second);
+    }
+
+    #[test]
+    fn test_cancelled_video_walk_stops_before_reading_directory() {
+        let cancellation = AtomicBool::new(true);
+        let result = walk_for_media_cancellable(Path::new("."), &cancellation);
+        assert_eq!(result.unwrap_err(), SCAN_SUPERSEDED_ERROR);
+    }
 
     #[test]
     fn test_is_video_file_mp4() {
@@ -1449,6 +1683,51 @@ mod tests {
     fn test_build_match_terms_with_numbers() {
         let terms = build_match_terms("product 123");
         assert!(terms.iter().any(|t| t.contains("123")));
+    }
+
+    #[test]
+    fn test_build_match_terms_product_color_model() {
+        let terms = build_match_terms("彩棉317 黑色");
+        assert!(terms.contains(&"彩棉317黑色".to_string()));
+        assert!(terms.contains(&"彩棉317".to_string()));
+        assert!(terms.contains(&"黑色".to_string()));
+        assert!(terms.contains(&"317".to_string()));
+    }
+
+    #[test]
+    fn test_build_match_terms_keeps_single_digit_model() {
+        let terms = build_match_terms("款 1");
+        assert!(terms.contains(&"1".to_string()));
+    }
+
+    #[test]
+    fn test_build_video_search_queries_dedupes_terms() {
+        let terms = build_match_terms("彩棉317 黑色");
+        let queries = build_video_search_queries("彩棉317", "黑色", &terms);
+        assert_eq!(queries.iter().filter(|q| q.as_str() == "彩棉317 黑色").count(), 1);
+        assert!(queries.contains(&"彩棉317".to_string()));
+        assert!(queries.contains(&"黑色".to_string()));
+        assert!(queries.contains(&"317".to_string()));
+    }
+
+    #[test]
+    fn test_score_media_candidate_exact_match_is_high() {
+        let root = PathBuf::from("library");
+        let file = root.join("彩棉317").join("黑色主视频.mp4");
+        let terms = build_match_terms("彩棉317 黑色");
+        let candidate = score_media_candidate(&root, &file, &terms);
+        assert!(candidate.score >= MIN_VIDEO_MATCH_SCORE);
+        assert!(candidate.score > 60.0);
+        assert!(!candidate.reason.is_empty());
+    }
+
+    #[test]
+    fn test_score_media_candidate_unrelated_is_below_threshold() {
+        let root = PathBuf::from("library");
+        let file = root.join("random").join("plain.mp4");
+        let terms = build_match_terms("彩棉317 黑色");
+        let candidate = score_media_candidate(&root, &file, &terms);
+        assert!(candidate.score < MIN_VIDEO_MATCH_SCORE);
     }
 
     #[test]
@@ -1551,6 +1830,15 @@ mod tests {
         // auto 模式但无 GPU 编码器，应回退 CPU
         let args = encoder_args("balanced", "auto", &[]);
         assert!(args.contains(&"libx264".to_string()));
+    }
+
+    #[test]
+    fn test_hwaccel_input_args_only_enabled_for_verified_gpu() {
+        assert!(hwaccel_input_args(false).is_empty());
+        assert_eq!(
+            hwaccel_input_args(true),
+            vec_into_strings(&["-hwaccel", "auto", "-hwaccel_output_format", "nv12"])
+        );
     }
 
     #[test]

@@ -5,14 +5,6 @@ import { alipayWorkbench, isTauri, TAURI_FILE_DROP_EVENT } from "@/lib/tauri-bri
 import type { AppSettings, FfmpegStatus, VideoCandidate, VideoRenderProgress, VideoRenderResult, VideoTask, VideoTemplateId } from "./lib/shared";
 import { autoFillSliceImages, createVideoTask, isTaskReady, normalizeVideoTask, updateTaskName } from "./lib/video";
 
-const musicPresets = [
-  { id: "sunny", label: "活力轻快", source: "CC0" },
-  { id: "fresh", label: "清新明亮", source: "CC0" },
-  { id: "soft", label: "温柔治愈", source: "CC0" },
-  { id: "urban", label: "时尚节奏", source: "CC0" },
-  { id: "clean", label: "简约质感", source: "CC0" }
-];
-
 const PROGRESS_UPDATE_INTERVAL_MS = 250;
 const TASK_QUEUE_WINDOW = 60;
 const CANDIDATE_INITIAL_VISIBLE = 60;
@@ -514,7 +506,7 @@ export function VideoWorkbench({
             <span>颜色/型号：{currentTask.colorName || "待填写"}</span>
           </div>
           {currentTask.template === "video-slice" && (
-            <MusicPicker task={currentTask} settings={settings} onPreset={(id) => updateCurrent({ musicPresetId: id, musicPath: "" })} onCustom={chooseMusic} />
+            <MusicPicker task={currentTask} settings={settings} onCustom={chooseMusic} />
           )}
           <TaskQueue tasks={tasks} currentIndex={currentIndex} onPick={setCurrentIndex} onRemove={removeTask} />
         </div>
@@ -776,15 +768,12 @@ function SliceSlot({ index, filled, active, onSlotClick, onSlotDrop, onSlotRemov
   );
 }
 
-function MusicPicker({ task, settings, onPreset, onCustom }: { task: VideoTask; settings: AppSettings; onPreset: (id: string) => void; onCustom: () => void }) {
+function MusicPicker({ task, settings, onCustom }: { task: VideoTask; settings: AppSettings; onCustom: () => void }) {
   const active = task.musicPresetId || settings.sliceMusicPresetId;
   return (
     <div className="music-picker">
-      <span><FileAudio size={15} /> 切片音乐 <b>内置 CC0</b></span>
+      <span><FileAudio size={15} /> 切片音乐 <b>自选</b></span>
       <div className="music-grid">
-        {musicPresets.map((item) => (
-          <button key={item.id} className={clsx(active === item.id && "active")} onClick={() => onPreset(item.id)} title="选择这首内置音乐">{item.label}<small>{item.source}</small></button>
-        ))}
         <button className={clsx(active === "custom" && "active")} onClick={onCustom} title="选择自定义音乐文件">自选音乐</button>
       </div>
       <em>{task.musicPath || settings.sliceCustomMusicPath || "未选择音乐时会生成无音乐视频"}</em>

@@ -1,13 +1,14 @@
 {
   "name": "ecommerce-ops-toolbox",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.1.0",
   "type": "module",
   "description": "电商运营工具箱桌面客户端（Tauri 版）",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "clean:bundle-resources": "node scripts/clean-tauri-bundle-resources.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

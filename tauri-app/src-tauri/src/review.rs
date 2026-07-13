@@ -22,9 +22,14 @@ use crate::types::{
     ReviewGenerationResult, ReviewSearchResult,
 };
 use base64::Engine;
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::AppHandle;
+use uuid::Uuid;
 
 /// 收评助手扫描的图片扩展名。
 const IMAGE_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp", ".bmp"];
@@ -37,6 +42,47 @@ const MAX_RESULTS: usize = 500;
 
 /// 单次缩略图加载最大数量。
 const MAX_THUMBNAIL_BATCH: usize = 64;
+
+const SCAN_SUPERSEDED_ERROR: &str = "扫描请求已被新的请求替代。";
+
+struct ActiveReviewScan {
+    request_id: String,
+    cancellation: Arc<AtomicBool>,
+}
+
+static ACTIVE_REVIEW_SCAN: Lazy<Mutex<Option<ActiveReviewScan>>> = Lazy::new(|| Mutex::new(None));
+
+fn start_review_scan_request(request_id: Option<String>) -> (String, Arc<AtomicBool>) {
+    let request_id = request_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("review-scan-{}", Uuid::new_v4()));
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let mut active = ACTIVE_REVIEW_SCAN.lock().unwrap();
+    if let Some(previous) = active.replace(ActiveReviewScan {
+        request_id: request_id.clone(),
+        cancellation: Arc::clone(&cancellation),
+    }) {
+        previous.cancellation.store(true, Ordering::Release);
+    }
+    (request_id, cancellation)
+}
+
+fn finish_review_scan_request(request_id: &str, cancellation: &Arc<AtomicBool>) {
+    let mut active = ACTIVE_REVIEW_SCAN.lock().unwrap();
+    if active.as_ref().is_some_and(|current| {
+        current.request_id == request_id && Arc::ptr_eq(&current.cancellation, cancellation)
+    }) {
+        active.take();
+    }
+}
+
+fn ensure_review_scan_active(cancellation: &AtomicBool) -> Result<(), String> {
+    if cancellation.load(Ordering::Acquire) {
+        Err(SCAN_SUPERSEDED_ERROR.to_string())
+    } else {
+        Ok(())
+    }
+}
 
 // ============================================================================
 // 工具函数
@@ -201,9 +247,18 @@ fn score_candidate(root: &Path, file_path: &Path, terms: &[String]) -> ReviewSea
 
 /// 递归扫描目录下的所有图片。
 fn walk_for_images(root: &Path) -> Vec<PathBuf> {
+    let cancellation = AtomicBool::new(false);
+    walk_for_images_cancellable(root, &cancellation).unwrap_or_default()
+}
+
+fn walk_for_images_cancellable(
+    root: &Path,
+    cancellation: &AtomicBool,
+) -> Result<Vec<PathBuf>, String> {
     let mut results = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        ensure_review_scan_active(cancellation)?;
         if results.len() >= MAX_SCAN_ITEMS {
             break;
         }
@@ -212,6 +267,7 @@ fn walk_for_images(root: &Path) -> Vec<PathBuf> {
             Err(_) => continue,
         };
         for entry in entries.flatten() {
+            ensure_review_scan_active(cancellation)?;
             if results.len() >= MAX_SCAN_ITEMS {
                 break;
             }
@@ -227,7 +283,7 @@ fn walk_for_images(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    results
+    Ok(results)
 }
 
 // ============================================================================
@@ -244,7 +300,20 @@ pub fn scan_review_assets(
     root: &str,
     query: &str,
     settings: &AppSettings,
+    app: &AppHandle,
 ) -> Result<Vec<ReviewSearchResult>, String> {
+    let cancellation = AtomicBool::new(false);
+    scan_review_assets_cancellable(root, query, settings, app, &cancellation)
+}
+
+fn scan_review_assets_cancellable(
+    root: &str,
+    query: &str,
+    settings: &AppSettings,
+    app: &AppHandle,
+    cancellation: &AtomicBool,
+) -> Result<Vec<ReviewSearchResult>, String> {
+    ensure_review_scan_active(cancellation)?;
     if root.trim().is_empty() {
         return Err("请先选择收评助手根目录。".to_string());
     }
@@ -267,28 +336,38 @@ pub fn scan_review_assets(
     let terms = build_match_terms(query);
 
     // 优先用 Everything 搜索（如果可用）
-    let es_path = everything::resolve_everything_es_path(settings);
+    ensure_review_scan_active(cancellation)?;
+    let es_path = everything::resolve_everything_es_path(app, settings);
     let exts: HashSet<String> = IMAGE_EXTS.iter().map(|e| e.to_string()).collect();
     let found_paths: Vec<String> = if !es_path.is_empty() {
         everything::search_with_everything(&es_path, root, query, &exts, MAX_RESULTS)
     } else {
         Vec::new()
     };
+    ensure_review_scan_active(cancellation)?;
 
     // Everything 搜索返回结果 → 评分；返回空 → 回退到 walkdir 全目录扫描
-    let mut candidates: Vec<ReviewSearchResult> = if !found_paths.is_empty() {
+    let candidates: Result<Vec<ReviewSearchResult>, String> = if !found_paths.is_empty() {
         found_paths
             .par_iter()
-            .map(|p| score_candidate(&root_path, Path::new(p), &terms))
+            .map(|p| {
+                ensure_review_scan_active(cancellation)?;
+                Ok(score_candidate(&root_path, Path::new(p), &terms))
+            })
             .collect()
     } else {
         // 退化方案：扫描整个目录树（Everything 不可用或索引未就绪时）
-        let all_files = walk_for_images(&root_path);
+        let all_files = walk_for_images_cancellable(&root_path, cancellation)?;
         all_files
             .par_iter()
-            .map(|p| score_candidate(&root_path, p, &terms))
+            .map(|p| {
+                ensure_review_scan_active(cancellation)?;
+                Ok(score_candidate(&root_path, p, &terms))
+            })
             .collect()
     };
+    let mut candidates = candidates?;
+    ensure_review_scan_active(cancellation)?;
 
     // 过滤零分项（如果有 query）；query 为空时全部保留
     if !terms.is_empty() {
@@ -531,6 +610,58 @@ fn get_review_api_profile(settings: &AppSettings) -> crate::types::ApiProfile {
     ai::get_active_api_profile(settings)
 }
 
+fn normalized_thinking_mode(requested: &str, configured: &str) -> String {
+    let mode = if requested.trim().is_empty() {
+        configured
+    } else {
+        requested
+    };
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "on" | "auto" => mode.trim().to_ascii_lowercase(),
+        _ => "off".to_string(),
+    }
+}
+
+fn anthropic_messages_endpoint(api_base_url: &str) -> String {
+    let base_url = api_base_url.trim_end_matches('/');
+    if base_url.ends_with("/v1") {
+        format!("{base_url}/messages")
+    } else {
+        format!("{base_url}/v1/messages")
+    }
+}
+
+fn anthropic_thinking_config(mode: &str) -> Option<serde_json::Value> {
+    match mode {
+        "on" => Some(serde_json::json!({ "type": "enabled", "budget_tokens": 4096 })),
+        "auto" => Some(serde_json::json!({ "type": "enabled", "budget_tokens": 2048 })),
+        _ => None,
+    }
+}
+
+fn openai_reasoning_effort(mode: &str) -> Option<&'static str> {
+    match mode {
+        "on" => Some("high"),
+        "auto" => Some("medium"),
+        _ => None,
+    }
+}
+
+fn anthropic_response_text(response: &serde_json::Value) -> String {
+    response
+        .get("content")
+        .and_then(|content| content.as_array())
+        .and_then(|blocks| {
+            blocks.iter().find_map(|block| {
+                (block.get("type").and_then(|value| value.as_str()) == Some("text"))
+                    .then(|| block.get("text").and_then(|value| value.as_str()))
+                    .flatten()
+            })
+        })
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// AI 文案生成（对应原 `generateReviewCopy`）。
 ///
 /// 简化实现：
@@ -549,6 +680,7 @@ pub async fn generate_review_copy(
 
     let target_length = options.target_length.clamp(30, 100);
     let copy_count = options.copy_count.clamp(3, 12) as usize;
+    let thinking_mode = normalized_thinking_mode(&options.thinking_mode, &settings.review_thinking_mode);
 
     let image_entries = load_image_base64_entries(
         &options.selected_paths,
@@ -606,11 +738,70 @@ pub async fn generate_review_copy(
     };
 
     // 调用 AI（直接构造 OpenAI 请求体，绕过 call_chat_completion 的限制以便支持图片）
+    if profile.api_type.eq_ignore_ascii_case("anthropic") {
+        let mut user_content = image_entries
+            .iter()
+            .map(|(base64, media_type)| {
+                serde_json::json!({
+                    "type": "image",
+                    "source": { "type": "base64", "media_type": media_type, "data": base64 }
+                })
+            })
+            .collect::<Vec<_>>();
+        user_content.push(serde_json::json!({ "type": "text", "text": prompt_text }));
+        let mut request_body = serde_json::json!({
+            "model": model_id,
+            "max_tokens": 4096,
+            "temperature": 0.88,
+            "system": final_system_prompt,
+            "messages": [{ "role": "user", "content": user_content }]
+        });
+        if let Some(thinking) = anthropic_thinking_config(&thinking_mode) {
+            request_body["thinking"] = thinking;
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|error| format!("HTTP client creation failed: {error}"))?;
+        let response = client
+            .post(anthropic_messages_endpoint(&profile.api_base_url))
+            .header("Content-Type", "application/json")
+            .header("x-api-key", &profile.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|error| format!("Anthropic generation failed: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Anthropic generation failed: {} {}", status, text.chars().take(200).collect::<String>()));
+        }
+        let response: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|error| format!("Anthropic response parse failed: {error}"))?;
+        let parsed: serde_json::Value = serde_json::from_str(&anthropic_response_text(&response))
+            .map_err(|error| format!("Model JSON parse failed: {error}"))?;
+        let copies = parsed
+            .get("copies")
+            .and_then(|copies| copies.as_array())
+            .map(|copies| {
+                copies
+                    .iter()
+                    .filter_map(|copy| copy.as_str().map(str::to_string))
+                    .take(copy_count)
+                    .collect()
+            })
+            .unwrap_or_default();
+        return Ok(ReviewGenerationResult { copies });
+    }
+
     let endpoint = format!(
         "{}/chat/completions",
         profile.api_base_url.trim_end_matches('/')
     );
-    let request_body = serde_json::json!({
+    let mut request_body = serde_json::json!({
         "model": model_id,
         "temperature": 0.88,
         "response_format": { "type": "json_object" },
@@ -634,6 +825,9 @@ pub async fn generate_review_copy(
             }
         ]
     });
+    if let Some(reasoning_effort) = openai_reasoning_effort(&thinking_mode) {
+        request_body["reasoning_effort"] = serde_json::json!(reasoning_effort);
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -705,11 +899,7 @@ pub async fn chat_review_copy(
     crate::security::validate_api_url(&profile.api_base_url)?;
 
     let target_length = payload.target_length.clamp(30, 100);
-    let thinking_mode = if payload.thinking_mode.is_empty() {
-        settings.review_thinking_mode.clone()
-    } else {
-        payload.thinking_mode.clone()
-    };
+    let thinking_mode = normalized_thinking_mode(&payload.thinking_mode, &settings.review_thinking_mode);
     let product_description = payload.product_description.clone().unwrap_or_default();
     let style_hints = format!(
         "专业程度：{}；买家真实感：{}；夸张程度：{}；场景化表达：{}；提到性价比：{}",
@@ -779,6 +969,69 @@ pub async fn chat_review_copy(
         format!("{}\n\n用户自定义要求：\n{}", system_prompt, custom_prompt)
     };
 
+    if profile.api_type.eq_ignore_ascii_case("anthropic") {
+        let mut messages = Vec::new();
+        for (index, message) in payload.messages.iter().enumerate() {
+            if message.role == "assistant" {
+                messages.push(serde_json::json!({ "role": "assistant", "content": message.content }));
+                continue;
+            }
+            let image_entries = &history_image_entries[index];
+            let content = if image_entries.is_empty() {
+                serde_json::Value::String(message.content.clone())
+            } else {
+                let mut blocks = image_entries
+                    .iter()
+                    .map(|(base64, media_type)| {
+                        serde_json::json!({
+                            "type": "image",
+                            "source": { "type": "base64", "media_type": media_type, "data": base64 }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                blocks.push(serde_json::json!({ "type": "text", "text": message.content }));
+                serde_json::Value::Array(blocks)
+            };
+            messages.push(serde_json::json!({ "role": "user", "content": content }));
+        }
+
+        let mut request_body = serde_json::json!({
+            "model": model_id,
+            "max_tokens": 2048,
+            "temperature": 0.88,
+            "system": final_system_prompt,
+            "messages": messages
+        });
+        if let Some(thinking) = anthropic_thinking_config(&thinking_mode) {
+            request_body["thinking"] = thinking;
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|error| format!("HTTP client creation failed: {error}"))?;
+        let response = client
+            .post(anthropic_messages_endpoint(&profile.api_base_url))
+            .header("Content-Type", "application/json")
+            .header("x-api-key", &profile.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|error| format!("Anthropic chat failed: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Anthropic chat failed: {} {}", status, text.chars().take(200).collect::<String>()));
+        }
+        let response: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|error| format!("Anthropic response parse failed: {error}"))?;
+        return Ok(ReviewChatResult {
+            reply: anthropic_response_text(&response),
+        });
+    }
+
     // 构造消息列表
     let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
         "role": "system",
@@ -808,11 +1061,14 @@ pub async fn chat_review_copy(
         }
     }
 
-    let request_body = serde_json::json!({
+    let mut request_body = serde_json::json!({
         "model": model_id,
         "temperature": 0.88,
         "messages": messages
     });
+    if let Some(reasoning_effort) = openai_reasoning_effort(&thinking_mode) {
+        request_body["reasoning_effort"] = serde_json::json!(reasoning_effort);
+    }
 
     let endpoint = format!(
         "{}/chat/completions",
@@ -872,13 +1128,20 @@ pub async fn review_scan_assets(
     root: String,
     query: String,
     settings: Option<AppSettings>,
-    _request_id: Option<String>,
+    request_id: Option<String>,
+    app: AppHandle,
 ) -> Result<Vec<ReviewSearchResult>, String> {
     let settings = settings.unwrap_or_default();
-    // 在阻塞线程中执行扫描
-    tokio::task::spawn_blocking(move || scan_review_assets(&root, &query, &settings))
+    let (request_id, cancellation) = start_review_scan_request(request_id);
+    let scan_cancellation = Arc::clone(&cancellation);
+    // 在阻塞线程中执行扫描；新的请求会取消前一个扫描令牌。
+    let result = tokio::task::spawn_blocking(move || {
+        scan_review_assets_cancellable(&root, &query, &settings, &app, scan_cancellation.as_ref())
+    })
         .await
-        .map_err(|e| format!("扫描任务失败：{}", e))?
+        .map_err(|e| format!("扫描任务失败：{}", e));
+    finish_review_scan_request(&request_id, &cancellation);
+    result?
 }
 
 /// 加载缩略图（对应 `review:loadThumbnails` IPC 通道）。
@@ -958,27 +1221,6 @@ pub async fn review_chat(
     chat_review_copy(&settings, &payload).await
 }
 
-/// 拖拽文件（对应 `drag:startFiles` IPC 通道）。
-///
-/// 简化实现：Tauri 没有等价于 Electron 的 `event.sender.startDrag` 的简单 API。
-/// 这里仅返回成功，实际拖拽由前端处理（或使用 tauri-plugin-drag）。
-#[tauri::command]
-pub async fn drag_start_files(paths: Vec<String>) -> Result<(), String> {
-    // 验证路径
-    for p in &paths {
-        if p.is_empty() {
-            continue;
-        }
-        if !Path::new(p).exists() {
-            continue;
-        }
-        // 安全校验：跳过系统目录
-        let _ = validate_path_safety(p, None);
-    }
-    // 实际拖拽需要前端使用 tauri-plugin-drag 或类似插件实现
-    Ok(())
-}
-
 // ============================================================================
 // 单元测试
 // ============================================================================
@@ -986,6 +1228,54 @@ pub async fn drag_start_files(paths: Vec<String>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_new_review_scan_cancels_previous_request() {
+        let (first_id, first) = start_review_scan_request(Some("first".to_string()));
+        let (second_id, second) = start_review_scan_request(Some("second".to_string()));
+
+        assert!(first.load(Ordering::Acquire));
+        assert!(!second.load(Ordering::Acquire));
+
+        // A stale completion must not clear the newer active scan.
+        finish_review_scan_request(&first_id, &first);
+        assert!(ACTIVE_REVIEW_SCAN.lock().unwrap().is_some());
+        finish_review_scan_request(&second_id, &second);
+    }
+
+    #[test]
+    fn test_cancelled_review_walk_stops_before_reading_directory() {
+        let cancellation = AtomicBool::new(true);
+        let result = walk_for_images_cancellable(Path::new("."), &cancellation);
+        assert_eq!(result.unwrap_err(), SCAN_SUPERSEDED_ERROR);
+    }
+
+    #[test]
+    fn test_anthropic_endpoint_normalization() {
+        assert_eq!(anthropic_messages_endpoint("https://api.anthropic.com"), "https://api.anthropic.com/v1/messages");
+        assert_eq!(anthropic_messages_endpoint("https://api.anthropic.com/v1/"), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn test_thinking_configuration() {
+        assert_eq!(normalized_thinking_mode("", "auto"), "auto");
+        assert_eq!(normalized_thinking_mode("on", "off"), "on");
+        assert_eq!(normalized_thinking_mode("invalid", "auto"), "off");
+        assert_eq!(openai_reasoning_effort("on"), Some("high"));
+        assert_eq!(openai_reasoning_effort("auto"), Some("medium"));
+        assert!(anthropic_thinking_config("off").is_none());
+    }
+
+    #[test]
+    fn test_anthropic_response_text_reads_text_block() {
+        let response = serde_json::json!({
+            "content": [
+                { "type": "thinking", "thinking": "internal" },
+                { "type": "text", "text": "final answer" }
+            ]
+        });
+        assert_eq!(anthropic_response_text(&response), "final answer");
+    }
 
     #[test]
     fn test_is_review_image_jpg() {
@@ -1207,12 +1497,6 @@ mod tests {
         };
         let result = review_chat(settings, payload).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_drag_start_files_empty() {
-        let result = drag_start_files(vec![]).await;
-        assert!(result.is_ok());
     }
 
     #[test]

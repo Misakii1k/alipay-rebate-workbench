@@ -69,11 +69,6 @@ pub fn get_es_path(app: &AppHandle) -> PathBuf {
     resources_bin_dir(app).join("es.exe")
 }
 
-/// 返回 Everything.exe 路径（resources/bin/Everything.exe）。
-pub fn get_everything_exe_path(app: &AppHandle) -> PathBuf {
-    resources_bin_dir(app).join("Everything.exe")
-}
-
 /// 返回支付宝模板路径（resources/assets/alipay-template.xlsx）。
 pub fn get_alipay_template_path(app: &AppHandle) -> PathBuf {
     get_resources_dir(app)

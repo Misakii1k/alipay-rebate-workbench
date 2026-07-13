@@ -27,3 +27,5 @@ latest*.yml
 release/
 releases/
 out/
+/output/
+/tmp/

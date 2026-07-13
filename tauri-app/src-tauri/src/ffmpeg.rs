@@ -9,8 +9,11 @@
 
 use crate::paths;
 use crate::types::{AppSettings, FfmpegDiagnoseResult, FfmpegDiagnosisItem, FfmpegFixResult, FfmpegStatus};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::AppHandle;
 
@@ -35,89 +38,104 @@ fn no_window(cmd: &mut Command) -> &mut Command {
 ///
 /// 返回字符串列表，如 `["cuda", "d3d11va", "qsv"]`；空列表表示无可用硬件加速器。
 /// 通过运行 `ffmpeg -hwaccels` 解析输出。
-pub fn detect_hwaccel(ffmpeg_path: &str) -> Vec<String> {
-    if ffmpeg_path.is_empty() || !Path::new(ffmpeg_path).exists() {
-        return Vec::new();
-    }
-    // 使用 run_process 带 10 秒超时，避免 ffmpeg 挂起时永久阻塞
-    let (code, output) = run_process(ffmpeg_path, &["-hide_banner", "-hwaccels"], 10_000);
-    if code != 0 {
-        return Vec::new();
-    }
-    // 输出格式：
-    // Hardware acceleration methods:
-    // cuda
-    // d3d11va
-    // qsv
-    output
-        .lines()
-        .skip(1) // 跳过 "Hardware acceleration methods:" 行
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
+const GPU_ENCODER_CANDIDATES: [&str; 3] = ["h264_nvenc", "h264_qsv", "h264_amf"];
+static GPU_ENCODER_PROBE_CACHE: Lazy<Mutex<HashMap<String, Vec<String>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn compiled_gpu_encoders(output: &str) -> Vec<String> {
+    let output = output.to_lowercase();
+    GPU_ENCODER_CANDIDATES
+        .into_iter()
+        .filter(|encoder| output.contains(encoder))
+        .map(str::to_string)
         .collect()
 }
 
-/// 返回人类可读的硬件加速器描述（用于 FfmpegStatus.acceleration 字段）。
-///
-/// 优先级：cuda（NVIDIA）> qsv（Intel）> amf（AMD）> d3d11va（通用 DX11）。
-/// 如果有 GPU 加速器，附加 CPU 多线程信息。
-pub fn describe_hwaccel(ffmpeg_path: &str) -> String {
-    let hwaccels = detect_hwaccel(ffmpeg_path);
-    let cpu_info = format!("CPU 多线程：{} 线程", cpu_threads());
+fn probe_gpu_encoder(ffmpeg_path: &str, encoder: &str) -> bool {
+    let null_target = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let args = [
+        "-y",
+        "-hide_banner",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=640x360:d=0.1:r=30",
+        "-frames:v",
+        "1",
+        "-c:v",
+        encoder,
+        "-f",
+        "null",
+        null_target,
+    ];
+    run_process(ffmpeg_path, &args, 15_000).0 == 0
+}
 
-    if hwaccels.is_empty() {
-        return cpu_info;
+fn gpu_encoder_label(encoder: &str) -> &'static str {
+    match encoder {
+        "h264_nvenc" => "NVIDIA NVENC",
+        "h264_qsv" => "Intel QSV",
+        "h264_amf" => "AMD AMF",
+        _ => "GPU",
     }
-
-    // 优先级判断
-    let gpu_label = if hwaccels.iter().any(|h| h == "cuda") {
-        "NVIDIA CUDA"
-    } else if hwaccels.iter().any(|h| h == "qsv") {
-        "Intel QSV"
-    } else if hwaccels.iter().any(|h| h == "amf") {
-        "AMD AMF"
-    } else if hwaccels.iter().any(|h| h == "d3d11va") {
-        "Direct3D 11"
-    } else if hwaccels.iter().any(|h| h == "videotoolbox") {
-        "VideoToolbox"
-    } else {
-        return cpu_info;
-    };
-
-    let detected_list = hwaccels.join(", ");
-    format!("GPU 加速：{}（已检测：{}）/ {}", gpu_label, detected_list, cpu_info)
 }
 
-/// 判断是否启用 GPU 加速（有任意硬件加速器可用）。
-pub fn has_hwaccel(ffmpeg_path: &str) -> bool {
-    !detect_hwaccel(ffmpeg_path).is_empty()
-}
-
-/// 检测 FFmpeg 已编译的硬件编码器（h264_nvenc / h264_qsv / h264_amf）。
-///
-/// 通过运行 `ffmpeg -encoders` 解析输出，比 `-hwaccels` 更可靠：
-/// `-hwaccels` 列出解码方法（cuda），不等于编码器（h264_nvenc）已编译。
+/// Return only hardware H.264 encoders that can complete a real encode on this
+/// machine. `ffmpeg -encoders` and `-hwaccels` describe build-time capability,
+/// which is insufficient when drivers or matching hardware are unavailable.
 pub fn detect_gpu_encoders(ffmpeg_path: &str) -> Vec<String> {
-    if ffmpeg_path.is_empty() || !Path::new(ffmpeg_path).exists() {
+    if ffmpeg_path.is_empty() || !Path::new(ffmpeg_path).is_file() {
         return Vec::new();
     }
-    // 带 10 秒超时，避免 ffmpeg 挂起
+    if let Some(cached) = GPU_ENCODER_PROBE_CACHE
+        .lock()
+        .unwrap()
+        .get(ffmpeg_path)
+        .cloned()
+    {
+        return cached;
+    }
+
     let (code, output) = run_process(ffmpeg_path, &["-hide_banner", "-encoders"], 10_000);
-    if code != 0 {
-        return Vec::new();
+    let usable = if code == 0 {
+        compiled_gpu_encoders(&output)
+            .into_iter()
+            .filter(|encoder| probe_gpu_encoder(ffmpeg_path, encoder))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    GPU_ENCODER_PROBE_CACHE
+        .lock()
+        .unwrap()
+        .insert(ffmpeg_path.to_string(), usable.clone());
+    usable
+}
+
+/// Backwards-compatible name for callers that need a usable hardware path.
+pub fn detect_hwaccel(ffmpeg_path: &str) -> Vec<String> {
+    detect_gpu_encoders(ffmpeg_path)
+}
+
+pub fn has_hwaccel(ffmpeg_path: &str) -> bool {
+    !detect_gpu_encoders(ffmpeg_path).is_empty()
+}
+
+/// Status text must report usable hardware encoders rather than compiled-only
+/// decoders, otherwise users are told GPU rendering is available when it is not.
+pub fn describe_hwaccel(ffmpeg_path: &str) -> String {
+    let usable = detect_gpu_encoders(ffmpeg_path);
+    let cpu_info = format!("CPU 多线程：{} 线程", cpu_threads());
+    if usable.is_empty() {
+        cpu_info
+    } else {
+        let labels = usable
+            .iter()
+            .map(|encoder| gpu_encoder_label(encoder))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("GPU 硬件编码：{} / {}", labels, cpu_info)
     }
-    let lower = output.to_lowercase();
-    let mut encoders = Vec::new();
-    if lower.contains("h264_nvenc") {
-        encoders.push("h264_nvenc".to_string());
-    }
-    if lower.contains("h264_qsv") {
-        encoders.push("h264_qsv".to_string());
-    }
-    if lower.contains("h264_amf") {
-        encoders.push("h264_amf".to_string());
-    }
-    encoders
 }
 
 /// 最大进程输出字节数（256KB，与原版一致）。
@@ -638,6 +656,18 @@ pub async fn ffmpeg_auto_fix(settings: AppSettings, app: AppHandle) -> Result<Ff
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_compiled_gpu_encoders_parses_known_candidates() {
+        let encoders = compiled_gpu_encoders(" V.... h264_nvenc\n V.... h264_qsv\n");
+        assert_eq!(encoders, vec!["h264_nvenc", "h264_qsv"]);
+    }
+
+    #[test]
+    fn test_gpu_encoder_label() {
+        assert_eq!(gpu_encoder_label("h264_nvenc"), "NVIDIA NVENC");
+        assert_eq!(gpu_encoder_label("h264_qsv"), "Intel QSV");
+    }
 
     #[test]
     fn test_has_non_ascii() {

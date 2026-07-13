@@ -1,4 +1,4 @@
-export type ToolboxTool = "rebate" | "video" | "review" | "compare" | "settings";
+export type ToolboxTool = "rebate" | "video" | "review" | "compare" | "image" | "settings";
 export type RebateViewKey = "import" | "entry" | "preview" | "export";
 export type VideoTemplateId = "bos-template" | "video-slice";
 export type VideoTaskStatus = "draft" | "ready" | "processing" | "done" | "failed";
@@ -10,6 +10,9 @@ export type VideoQualityMode = "preserve" | "high" | "balanced";
 export type ReviewWorkspaceMode = "search" | "ai" | "mixed";
 export type ReviewThinkingMode = "off" | "auto" | "on";
 export type DirectoryCapabilityKind = "mediaRoot" | "reviewRoot" | "videoLibrary" | "videoOutput";
+export type ImageCropMode = "center-crop" | "pad" | "crop-pad";
+export type ImageOutputFormat = "jpg" | "png" | "webp";
+export type ImageGenerationProvider = "openai" | "domestic" | "custom";
 
 export type ApiType = "openai" | "anthropic";
 
@@ -82,6 +85,67 @@ export interface AppSettings {
   lastSeenChangelogVersion?: string;
   everythingEsPath: string;
   sidebarCollapsed: boolean;
+}
+
+export interface ImageCropTemplate {
+  id: string;
+  name: string;
+  targetWidth: number;
+  targetHeight: number;
+  mode: ImageCropMode;
+  backgroundColor: string;
+  outputFormat: ImageOutputFormat;
+  quality: number;
+  suffix: string;
+  updatedAt: string;
+}
+
+export interface ImageProcessTask {
+  id: string;
+  inputPath: string;
+  fileName: string;
+  status: "pending" | "processing" | "success" | "failed";
+  outputPath?: string;
+  error?: string;
+  previewUrl?: string;
+}
+
+export interface ImageProcessPayload {
+  inputPaths: string[];
+  outputDir?: string;
+  targetWidth: number;
+  targetHeight: number;
+  mode: ImageCropMode;
+  backgroundColor: string;
+  outputFormat: ImageOutputFormat;
+  quality: number;
+  suffix: string;
+}
+
+export interface ImageProcessResult {
+  inputPath: string;
+  outputPath?: string;
+  status: "success" | "failed";
+  error?: string;
+}
+
+export interface ImageGenerationPayload {
+  provider: ImageGenerationProvider;
+  apiBaseUrl: string;
+  apiKey: string;
+  model: string;
+  prompt: string;
+  size: string;
+  count: number;
+  outputDir: string;
+}
+
+export interface ImageGenerationResult {
+  id: string;
+  outputPath?: string;
+  previewUrl?: string;
+  status: "success" | "failed";
+  error?: string;
 }
 
 export interface VideoCandidate {
@@ -451,7 +515,7 @@ export function normalizeSettings(value: Partial<AppSettings> | null | undefined
     learningPromptNotes: String(raw.learningPromptNotes ?? ""),
     showBeginnerGuide: Boolean(raw.showBeginnerGuide ?? DEFAULT_SETTINGS.showBeginnerGuide),
     completedTours: Array.isArray(raw.completedTours)
-      ? raw.completedTours.filter((tool): tool is ToolboxTool => ["rebate", "video", "review", "compare", "settings"].includes(String(tool)))
+      ? raw.completedTours.filter((tool): tool is ToolboxTool => ["rebate", "video", "review", "compare", "image", "settings"].includes(String(tool)))
       : [],
     toolboxName: String(raw.toolboxName ?? DEFAULT_SETTINGS.toolboxName),
     videoLibraryDir: String(raw.videoLibraryDir ?? ""),
